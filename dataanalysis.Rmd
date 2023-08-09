@@ -1,0 +1,3412 @@
+---
+title: "Report" 
+
+output: html_document 
+
+date: "2023-04-19" 
+--- 
+
+# library the data 
+
+```{r setup, include=FALSE} 
+
+knitr::opts_chunk$set(echo = TRUE) 
+
+
+library(tidyverse) 
+
+library(viridis) 
+
+library(RobustLinearReg)
+
+library(mblm)
+
+source("./gcode/theme_gar.txt")
+source("./gcode/Rallfun-v35-light.txt")
+# install.packages("devtools")
+# devtools::install_github("GRousselet/bootcorci")
+
+library(rogme)
+# devtools::install_github("GRousselet/rogme")
+
+library(bootcorci)
+# devtools::install_github("GRousselet/bootcorci")
+
+source("rgar_visualisation.txt")
+
+library(ggpubr)
+
+library(WRS)
+# install.packages(c("MASS", "akima", "robustbase"))
+# install.packages(c("akima", "cobs", "robust", "mgcv", "scatterplot3d", "quantreg", "rrcov", "lars", "pwr", "trimcluster", "mc2d", "psych", "Rfit", "DepthProc", "class", "fda", "rankFD"))
+# devtools::install_github("nicebread/WRS", subdir="pkg")
+
+library(reshape2)
+
+``` 
+
+# 50IT
+## import dataset
+
+```{r} 
+
+age<- read.table("data/bdata/fttc_age.txt")  
+
+maxmi<- read.table("data/bdata/fttc_maxmi.txt")  
+
+bmi_50it <- read.table("data/bdata/fttc_mi_50it.txt")  
+
+bmi_ntrials <- read.table("data/bdata/fttc_mi_ntrials.txt")  
+
+sex <- read.table("data/bdata/fttc_sex.txt")  
+
+times <- read.table("data/bdata/fttc_times.txt")  
+
+kageo <- read.table("data/kdata/age.txt") 
+
+fmaxmio<- read.table("data/kdata/maxmi/atd_maxmi_ferp_fnerp.txt") 
+
+hmaxmio<- read.table("data/kdata/maxmi/atd_maxmi_herp_hnerp.txt") 
+
+lmaxmio<- read.table("data/kdata/maxmi/atd_maxmi_lerp_lnerp.txt") 
+
+ksexo <- read.table("data/kdata/sex.txt")
+
+ktimeso <- read.table("data/kdata/times.txt")
+
+``` 
+
+
+# B120 dataset preprocess 
+
+```{r} 
+
+age <-  age|> 
+
+   rename("age" = "V1") #rename the column
+
+  
+
+sex <- sex |> 
+
+   rename("sex" = "V1") 
+
+maxmi <- as.data.frame(t(maxmi))  # transform the dataset into similar width
+
+colnames(maxmi) <-c(times) # add timeline to each datapoint
+
+bindasm <- cbind(age,sex,maxmi) |> 
+
+  mutate(id = row_number()) #combine the dataset and add a participants id into it
+
+long_bindasm <- pivot_longer(data = bindasm, 
+
+                             cols = 3:453, 
+
+                             names_to = "times", 
+
+                             values_to = "maxmi")|> 
+
+  arrange(desc(age)) 
+
+long_bindasm$times <-  as.numeric(unlist(long_bindasm$times))
+
+
+# transform the dataset into long version for plotting
+``` 
+
+## B120 face MAX MI 
+
+```{r} 
+
+fmi120<-ggplot(long_bindasm, aes(x = times, y = maxmi, group = id,colour = age))+ 
+
+   geom_line(alpha = 0.1, size = 1) + 
+
+   scale_color_viridis(discrete = FALSE, option = "D")+ 
+
+   scale_x_continuous(name = "Time in ms",  
+
+                     breaks = seq(-300, 600, 100),
+                     expand = c(0, 30)) + 
+
+   scale_y_continuous(name = "MAX MI",  
+
+                     breaks = seq(0, 1, 0.1),
+                      
+                     limits = c(0, 0.9),
+                     expand = c(0, 0))+  
+   labs(tag = "Face B120")+
+
+   theme_bw()+ 
+
+   theme(legend.position = "none") +
+   theme(axis.title.x  = element_blank(),
+         axis.title.y  = element_text(size=30),
+         axis.text.x = element_blank(),
+         axis.text.y = element_text(size=25),
+         plot.tag = element_text(size = 30),
+         plot.tag.position = c(0.25, 0.85)) 
+
+fmi120 
+
+```
+## ageweightedMaxMI
+```{r}
+
+xf0500 <- pivot_longer(data = times, 
+
+                             cols = 1:451)|>
+                         subset(value >= 0)|>
+  subset(value <= 500) |>
+  pivot_wider(names_from = name,
+  values_from = value)
+Nf0500 <- length(xf0500)
+Nf <- length(times)
+agev <- age[,1]
+I <- order(agev)
+maxmit<- t(maxmi)
+maxmit <- sweep(maxmit, 2, median(maxmit[times < 0, ]), "-")
+maxmit <- sweep(maxmit, 2, max(maxmit), "/")
+maxmit <- maxmit[, I]
+maxmit <- t(maxmit)
+
+cs1q17 <- matrix(0, nrow = 17, ncol = Nf)
+ageq <- numeric(17)
+count <- 0
+vec <- 1:length(agev)
+
+for (R in seq(1, 9, 0.5)) {
+  count <- count + 1
+  q <- R / 10
+  n <- length(agev)
+  m1 <- (n + 1) * q
+  m2 <- (n + 1) * (1 - q)
+  vec <- 1:length(agev)
+  w <- pbeta(vec / n, m1, m2) - pbeta((vec - 1) / n, m1, m2)
+  
+  # Create a temporary matrix by multiplying each column of maxmit by w
+  temp_mat <- sweep(maxmit, 2, w, `*`)
+  
+  # Sum across the columns, resulting in a vector
+  cs1q17[count, ] <- colSums(temp_mat)
+  
+  ageq[count] <- sum(w * agev[I])
+}
+
+cs1q17 <-  pivot_longer(as.data.frame(cs1q17), 1:451) 
+timeslong <- pivot_longer(as.data.frame(rep(times, 17)),1:7667)
+ageq <- as.data.frame(rep(ageq, each = length(times)))
+df <- cbind(timeslong$value,  cs1q17$value, ageq)
+
+colnames(df) <- c('Time', 'weightedMaxMI', 'ageq')
+
+AgeweightedMI <- ggplot(df, aes(x = Time, y = weightedMaxMI, color = as.factor(ageq))) +
+  geom_line(size = 1) +
+  scale_color_viridis(discrete = TRUE, option = "D")+ 
+
+  theme_bw() +
+  labs(x = 'Time in ms', y = 'Age weighted mean of Max MI', color = 'ageq') +
+  theme(legend.position = "right", legend.box = "vertical") +
+  scale_x_continuous(breaks = seq(-300, 600, 100),
+                     limits = c(-300, 600),
+                     expand = c(0, 0))+ 
+
+   scale_y_continuous(
+                     breaks = seq(0, 0.9, 0.1),
+                      
+                     limits = c(0, 0.9),
+                     expand = c(0, 0))+  
+
+   theme_bw()+ 
+
+   theme(legend.position = "none")  +
+   theme(axis.title.x  = element_text(size=25),
+         axis.title.y  = element_text(size=25),
+         axis.text.x = element_text(size=25),
+         axis.text.y = element_text(size=25)) 
+AgeweightedMI
+```
+
+ 
+
+## face B120 normalized cum 
+
+```{r} 
+
+cs_bindasm0 <- pivot_longer(data = bindasm, 
+
+                             cols = 3:453, 
+
+                             names_to = "times", 
+
+                             values_to = "maxmi") 
+
+cs_bindasm0$times <-  as.numeric(unlist(cs_bindasm0$times))
+
+cs_bindasm0 <- cs_bindasm0|>
+  
+  subset(times >= 0)|>
+  subset(times <= 500) |>
+  #so i add a subset here to remove all the data point before 0
+
+  group_by(id)|> 
+  mutate(cums = cumsum(maxmi))|> 
+  mutate(cums = cums - min(cums))|>
+  mutate(normalizer = cums/max(cums))|>
+  ungroup() 
+
+
+
+cmfmi120<-ggplot(cs_bindasm0, aes(x = times, y = normalizer,group = id, colour = age))+ 
+
+  geom_line(alpha = 0.1, size = 1)+  
+    geom_hline(yintercept=0.5, color="red", size = 2)+ 
+
+   scale_color_viridis(discrete = FALSE, option = "D")+ 
+
+   scale_x_continuous(name = "Time in ms",  
+
+                     breaks = seq(0, 500, 100),
+                     expand = c(0, 0)) + 
+
+   scale_y_continuous(name = "Normalize Cum MAX MI",  
+
+                     breaks = seq(0, 1, 0.1),
+                      
+                     limits = c(0,1),
+                     expand = c(0, 0)) +  
+  
+   labs(tag = "Face B120")+
+
+   theme_bw()+ 
+
+   theme(legend.position = "none") +
+   theme(axis.title.x  = element_blank(),
+         axis.title.y  = element_text(size=30),
+         axis.text.x = element_blank(),
+         axis.text.y = element_text(size=25),
+         plot.tag = element_text(size = 30),
+         plot.tag.position = c(0.3, 0.85)) 
+
+cmfmi120
+``` 
+
+
+
+
+## face B120 50IT
+
+```{r, warning = FALSE} 
+
+
+create_quantile_segment_frame <- function(data,idn,quantiles) {
+  dens <- data[data$id == idn,]$normalizer
+  ecdf <- stats::approxfun(dens,data[data$id == idn,]$times , ties = "ordered")
+  ys <- ecdf(quantiles) 
+} 
+
+a50 <- data.frame(a50 = rep (NA, 1))
+for (id in 1: 120){
+     a50[,id] <- create_quantile_segment_frame(cs_bindasm0,id, 0.5)
+     colnames(a50)[id]<-paste0(cs_bindasm0 [cs_bindasm0 $id == id,]$age)
+ 
+}
+a50<- pivot_longer(data = a50,
+                   cols = 1:119,
+                   names_to = "age",
+                   values_to = "rn50it")
+
+a50$age <- as.numeric(unlist(age))
+
+
+```
+
+```{r}
+modeltsr <- stsreg(x=a50$age,y=a50$rn50it)
+
+```
+
+```{r}
+plot120tsr<-ggplot(data = a50,aes(age, rn50it))+
+  
+   geom_point()+ 
+  
+   geom_abline(intercept = modeltsr[["coef"]][1], slope = modeltsr[["coef"]][2],colour = "#ff33cc")+ 
+
+   scale_color_viridis(discrete = FALSE, option = "D")+
+  
+   scale_x_continuous(name = "Age in Years",  
+
+                     breaks = seq(20, 80, 10)) + 
+
+   scale_y_continuous(name = "Face 50IT in ms",  
+
+                     breaks = seq(120, 300, 20), 
+                     limits = c(110, 300))+ 
+
+   theme_bw()+ 
+
+   theme(legend.position = "none") +
+   labs(tag="A")+
+   theme(plot.title = element_text(size=15),
+         axis.title.x  = element_text(size=15),
+         axis.title.y  = element_text(size=15),
+        plot.tag = element_text(size = 30),
+        plot.tag.position = c(0.3, 0.85))
+
+plot120tsr
+```
+
+
+## preprocess J48
+
+```{r}
+
+## transfer face maxmi data
+fmaxmit <-   as.data.frame(strsplit(fmaxmio$V1, split = ","))
+
+fmaxmi <- data.frame(fmaxmi = rep (NA, 650))
+for (v in 1:48){
+ fmaxmi[,v] <- abs(as.numeric(fmaxmit[,v]))
+ colnames(fmaxmi)[v]<-paste0("participant",v)
+}
+
+## transfer house maxmi data
+hmaxmit <-   as.data.frame(strsplit(hmaxmio$V1, split = ","))
+
+
+hmaxmi <- data.frame(hmaxmi = rep (NA, 650))
+for (v in 1:48){
+ hmaxmi[,v] <- abs(as.numeric(hmaxmit[,v]))
+ colnames(hmaxmi)[v]<-paste0("participant",v)
+}
+
+## transfer letter maxmi data
+lmaxmit <-   as.data.frame(strsplit(lmaxmio$V1, split = ","))
+
+lmaxmi <- data.frame(lmaxmi = rep (NA, 650))
+for (v in 1:48){
+ lmaxmi[,v] <- abs(as.numeric(lmaxmit[,v]))
+ colnames(lmaxmi)[v]<-paste0("participant",v)
+}
+
+```
+
+### face J48
+```{r}
+
+ktimes <- as.numeric(t(as.data.frame(strsplit(ktimeso$V1, split = ","))))
+
+fmaxmi <- as.data.frame(t(fmaxmi))
+
+colnames(fmaxmi) <-c(ktimes) 
+
+kage <-  kageo|> 
+   rename("age" = "V1")|>
+   as.data.frame()
+
+ksex <-  ksexo|> 
+   rename("sex" = "V1")|>
+   as.data.frame()
+
+bindfmaxmi <- cbind(kage,ksex, fmaxmi)|> 
+  mutate(id = row_number())
+
+longfmaxmi <- pivot_longer(
+  data = bindfmaxmi,
+  cols = 3:652,
+  names_to = "times",
+  values_to = "maxmi"
+) 
+
+longfmaxmi$times <-  as.numeric(unlist(longfmaxmi$times))
+longfmaxmi <- longfmaxmi|>subset(times <= 600) 
+
+```
+
+### house J48
+
+```{r}
+hmaxmi <- as.data.frame(t(hmaxmi))
+
+colnames(hmaxmi) <-c(ktimes) 
+
+bindhmaxmi <- cbind(kage,ksex, hmaxmi)|> 
+  mutate(id = row_number())
+
+longhmaxmi <- pivot_longer(
+  data = bindhmaxmi,
+  cols = 3:652,
+  names_to = "times",
+  values_to = "maxmi"
+)
+
+longhmaxmi$times <-  as.numeric(unlist(longhmaxmi$times))
+longhmaxmi <- longhmaxmi|>subset(times <= 600) 
+
+```
+
+### letter J48
+
+```{r}
+lmaxmi <- as.data.frame(t(lmaxmi))
+
+colnames(lmaxmi) <-c(ktimes) 
+
+bindlmaxmi <- cbind(kage,ksex, lmaxmi)|> 
+  mutate(id = row_number())
+
+longlmaxmi <- pivot_longer(
+  data = bindlmaxmi,
+  cols = 3:652,
+  names_to = "times",
+  values_to = "maxmi"
+)
+
+longlmaxmi$times <-  as.numeric(unlist(longlmaxmi$times))
+longlmaxmi <- longlmaxmi|>subset(times <= 600) 
+
+```
+
+
+## face J48 max mi 
+
+```{r}
+
+fmi<-ggplot(longfmaxmi, aes(x = times, y = maxmi,group = id, colour = age))+ 
+
+   geom_line(alpha = 0.2,size = 1) +  
+
+   scale_color_viridis(discrete = FALSE, option = "D")+ 
+
+   scale_x_continuous(name = "Time in ms",  
+
+                     breaks = seq(-300, 600, 100),
+                      expand = c(0, 30)) + 
+
+   scale_y_continuous(name = "MAX MI",  
+
+                     breaks = seq(0, 1, 0.1),
+                      
+                     limits = c(0, 0.9),
+                      expand = c(0,0))+ 
+   labs(tag = "Face J48")+
+
+   theme_bw()+ 
+
+   theme(legend.position = "none") +
+   theme(axis.title.x  = element_blank(),
+         axis.title.y  = element_blank(),
+         axis.text.x = element_blank(),
+         axis.text.y = element_blank(),
+         plot.tag = element_text(size = 30),
+         plot.tag.position = c(0.25, 0.85))
+
+fmi 
+
+```
+## median Face J48 Maxmi
+```{r}
+longfmaxmiy <- longfmaxmi |>
+  subset(age <= 39)
+longfmaxmio <- longfmaxmi |>
+  subset(age >= 59)
+
+fmimedian<-ggplot(longfmaxmi, aes(x = times, y = maxmi,group = id, colour = age))+  
+  stat_summary(geom="line", fun = "median", group = "times", color="Navy", size=2, data = longfmaxmiy)+
+  stat_summary(geom="line", fun = "median", group = "times", color="green", size=2, data = longfmaxmio)+  
+
+   scale_color_viridis(discrete = FALSE, option = "D")+ 
+
+   scale_x_continuous(name = "Time in ms",  
+
+                     breaks = seq(-300, 600, 100),
+                      expand = c(0, 30)) + 
+
+   scale_y_continuous(name = "MAX MI",  
+
+                     breaks = seq(0, 1, 0.1),
+                      
+                     limits = c(0, 0.9),
+                      expand = c(0, 0))+ 
+   labs(tag = "Face J48")+
+
+   theme_bw()+ 
+
+   theme(legend.position = "none") +
+   theme(axis.title.x  = element_text(size = 25),
+         axis.title.y  = element_text(size = 25),
+         axis.text.x = element_text(size = 25),
+         axis.text.y = element_text(size = 25),
+         plot.tag = element_text(size = 25),
+         plot.tag.position = c(0.35, 0.85))
+fmimedian
+```
+
+
+## house J48 max mi 
+```{r}
+
+hmi<-ggplot(longhmaxmi, aes(x = times, y = maxmi,group = id, colour = age))+ 
+
+   geom_line(alpha = 0.2,size = 1) +  
+
+   scale_color_viridis(discrete = FALSE, option = "D")+ 
+
+   scale_x_continuous(name = "Time in ms",  
+
+                     breaks = seq(-300, 600, 100),
+                      expand = c(0, 30)) + 
+
+   scale_y_continuous(name = "MAX MI",  
+
+                     breaks = seq(0, 1, 0.1),
+                      
+                     limits = c(0, 0.9),
+                      expand = c(0, 0))+ 
+  labs(tag = "House J48")+
+
+   theme_bw()+ 
+
+   theme(legend.position = "none") +
+   theme(axis.title.x  = element_text(size=30),
+         axis.title.y  = element_text(size=30),
+         axis.text.x = element_text(size=25),
+         axis.text.y = element_text(size=25),
+         plot.tag = element_text(size = 30),
+         plot.tag.position = c(0.25, 0.85))
+
+hmi 
+```
+## median house J48 Maxmi
+```{r}
+longhmaxmiy <- longhmaxmi |>
+  subset(age <= 39)
+longhmaxmio <- longhmaxmi |>
+  subset(age >= 59)
+
+hmimedian<-ggplot(longhmaxmi, aes(x = times, y = maxmi,group = id, colour = age))+  
+  stat_summary(geom="line", fun = "median", group = "times", color="Navy", size=2, data = longhmaxmiy)+
+  stat_summary(geom="line", fun = "median", group = "times", color="green", size=2, data = longhmaxmio)+  
+
+   scale_color_viridis(discrete = FALSE, option = "D")+ 
+
+   scale_x_continuous(name = "Time in ms",  
+
+                     breaks = seq(-300, 600, 100),
+                      expand = c(0, 30)) + 
+
+   scale_y_continuous(name = "MAX MI",  
+
+                     breaks = seq(0, 1, 0.1),
+                      
+                     limits = c(0, 0.9),
+                      expand = c(0, 0))+ 
+   labs(tag = "House J48")+
+
+   theme_bw()+ 
+
+   theme(legend.position = "none") +
+   theme(axis.title.x  = element_text(size=30),
+         axis.title.y  = element_blank(),
+         axis.text.x = element_text(size=25),
+         axis.text.y = element_blank(),
+         plot.tag = element_text(size = 25),
+         plot.tag.position = c(0.35, 0.85))
+hmimedian
+```
+
+# letter J48 max mi  
+```{r}
+lmi<-ggplot(longlmaxmi, aes(x = times, y = maxmi,group = id, colour = age))+ 
+
+   geom_line(alpha = 0.2, size = 1) +  
+
+   scale_color_viridis(discrete = FALSE, option = "D")+ 
+
+   scale_x_continuous(name = "Time in ms",  
+
+                     breaks = seq(-300, 600, 100),
+                      expand = c(0, 30)) + 
+
+   scale_y_continuous(name = "MAX MI ",  
+
+                     breaks = seq(0, 1, 0.1),
+                      
+                     limits = c(0, 0.9),
+                      expand = c(0, 0))+ 
+  labs(tag = "Letter J48")+
+
+   theme_bw()+ 
+
+   theme(legend.position = "none") +
+   theme(axis.title.x  = element_text(size=30),
+         axis.title.y  = element_blank(),
+         axis.text.x = element_text(size=25),
+         axis.text.y = element_blank(),
+         plot.tag = element_text(size = 30),
+         plot.tag.position = c(0.25, 0.85))
+
+lmi 
+```
+## median Letter J48 Maxmi
+```{r}
+longlmaxmiy <- longlmaxmi |>
+  subset(age <= 39)
+longlmaxmio <- longlmaxmi |>
+  subset(age >= 59)
+
+lmimedian<-ggplot(longlmaxmi, aes(x = times, y = maxmi,group = id, colour = age))+  
+  stat_summary(geom="line", fun = "median", group = "times", color="Navy", size=2, data = longlmaxmiy)+
+  stat_summary(geom="line", fun = "median", group = "times", color="Green", size=2, data = longlmaxmio)+  
+
+   scale_color_viridis(discrete = FALSE, option = "D")+ 
+
+   scale_x_continuous(name = "Time in ms",  
+
+                     breaks = seq(-300, 600, 100),
+                      expand = c(0, 30)) + 
+
+   scale_y_continuous(name = "MAX MI",  
+
+                     breaks = seq(0, 1, 0.1),
+                      
+                     limits = c(0, 0.9),
+                      expand = c(0, 0))+ 
+   labs(tag = "Letter J48")+
+
+   theme_bw()+ 
+
+   theme(legend.position = "none") +
+   theme(axis.title.x  = element_text(size=30),
+         axis.title.y  = element_blank(),
+         axis.text.x = element_text(size=25),
+         axis.text.y = element_blank(),
+         plot.tag = element_text(size = 25),
+         plot.tag.position = c(0.4, 0.85))
+
+lmimedian
+```
+
+# cum sum preprocess
+
+```{r}
+longfmaxmi$times <-  as.numeric(unlist(longfmaxmi$times))
+
+longfmaxmi0 <- longfmaxmi|>
+  
+  subset(times >= 0)|>
+  subset(times <= 500) |>
+  #so i add a subset here to remove all the data point before 0
+
+  group_by(id)|> 
+  mutate(cums = cumsum(abs(maxmi)))|> 
+  mutate(cums = cums - min(cums))|>
+  mutate(normalizer = cums/max(cums))|>
+  ungroup() 
+
+```
+
+
+```{r}
+longhmaxmi$times <-  as.numeric(unlist(longhmaxmi$times))
+
+longhmaxmi0 <- longhmaxmi|>
+  
+  subset(times >= 0)|>
+  subset(times <= 500) |>
+  #so i add a subset here to remove all the data point before 0
+
+  group_by(id)|> 
+  mutate(cums = cumsum(abs(maxmi)))|> 
+  mutate(cums = cums - min(cums))|>
+  mutate(normalizer = cums/max(cums))|>
+  ungroup() 
+```
+
+```{r}
+longlmaxmi$times <-  as.numeric(unlist(longlmaxmi$times))
+
+longlmaxmi0 <- longlmaxmi|>
+  
+  subset(times >= 0)|>
+  subset(times <= 500) |>
+  #so i add a subset here to remove all the data point before 0
+
+  group_by(id)|> 
+  mutate(cums = cumsum(abs(maxmi)))|> 
+  mutate(cums = cums - min(cums))|>
+  mutate(normalizer = cums/max(cums))|>
+  ungroup() 
+```
+
+
+
+
+
+# plot the cumulate sum 
+
+## face cumulate sum max mi
+
+```{r}
+
+longfmaxmi0y <- longfmaxmi0 |>
+  subset(age <= 39)
+longfmaxmi0o <- longfmaxmi0 |>
+  subset(age >= 59)
+
+cmfmi<- ggplot(longfmaxmi0, aes(x = times, y = normalizer,group = id, colour = age))+  
+
+  geom_line(alpha = 0.2, size = 1)+  
+
+  geom_hline(yintercept=0.5, color="red", size = 2)+ 
+
+   scale_color_viridis(discrete = FALSE, option = "D")+ 
+
+   scale_x_continuous(name = "Time in ms",  
+
+                     breaks = seq(0, 500, 100),
+                     expand = c(0, 0)) + 
+
+   scale_y_continuous(name = "Normalize Cum MAX MI",  
+
+                     breaks = seq(0, 1, 0.1),
+                      
+                     limits = c(0,1),
+                     expand = c(0, 0)) +  
+  
+   labs(tag = "Face J48")+
+
+   theme_bw()+ 
+
+   theme(legend.position = "none") +
+   theme(axis.title.x  = element_blank(),
+         axis.title.y  = element_blank(),
+         axis.text.x = element_blank(),
+         axis.text.y = element_blank(),
+         plot.tag = element_text(size = 30),
+         plot.tag.position = c(0.25, 0.85)) +
+   stat_summary(geom="line", fun = "median", group = "times", color="Navy", size=2, data = longfmaxmi0y)+
+   stat_summary(geom="line", fun = "median", group = "times", color="Green", size=2, data = longfmaxmi0o)
+
+
+cmfmi
+```
+## house cumulate sum max mi
+```{r}
+longhmaxmi0y <- longhmaxmi0 |>
+  subset(age <= 39)
+longhmaxmi0o <- longhmaxmi0 |>
+  subset(age >= 59)
+
+cmhmi<-ggplot(longhmaxmi0, aes(x = times, y = normalizer,group = id, colour = age))+   
+
+  geom_line(alpha = 0.2, size = 1)+  
+
+  geom_hline(yintercept=0.5, color="red", size = 2)+ 
+
+   scale_color_viridis(discrete = FALSE, option = "D")+ 
+
+   scale_x_continuous(name = "Time in ms",  
+
+                     breaks = seq(0, 500, 100),
+                     expand = c(0, 0)) + 
+
+   scale_y_continuous(name = "Normalize Cum MAX MI",  
+
+                     breaks = seq(0, 1, 0.1),
+                      
+                     limits = c(0,1),
+                     expand = c(0, 0)) +  
+  
+   labs(tag = "House J48")+
+
+   theme_bw()+ 
+
+   theme(legend.position = "none") +
+   theme(axis.title.x  = element_text(size=30),
+         axis.title.y  = element_text(size=30),
+         axis.text.x = element_text(size=25),
+         axis.text.y = element_text(size=25),
+         plot.tag = element_text(size = 30),
+         plot.tag.position = c(0.3, 0.85)) +
+   stat_summary(geom="line", fun = "median", group = "times", color="Navy", size=2, data = longhmaxmi0y)+
+   stat_summary(geom="line", fun = "median", group = "times", color="Green", size=2, data = longhmaxmi0o)
+
+cmhmi
+```
+
+## letter cumulate sum max mi
+```{r}
+longlmaxmi0y <- longlmaxmi0 |>
+  subset(age <= 39)
+longlmaxmi0o <- longlmaxmi0 |>
+  subset(age >= 59)
+
+cmlmi<-ggplot(longlmaxmi0, aes(x = times, y = normalizer,group = id, colour = age))+   
+
+  geom_line(alpha = 0.2, size = 1)+  
+
+  geom_hline(yintercept=0.5, color="red", size = 2)+ 
+
+   scale_color_viridis(discrete = FALSE, option = "D")+ 
+
+   scale_x_continuous(name = "Time in ms",  
+
+                     breaks = seq(0, 500, 100),
+                     expand = c(0,0)) + 
+
+   scale_y_continuous(name = "Normalize Cum MAX MI",  
+
+                     breaks = seq(0, 1, 0.1),
+                      
+                     limits = c(0,1),
+                     expand = c(0, 0)) +  
+  
+   labs(tag = "Letter J48")+
+
+   theme_bw()+ 
+
+   theme(legend.position = "none") +
+   theme(axis.title.x  = element_text(size=30),
+         axis.title.y  = element_blank(),
+         axis.text.x = element_text(size=25),
+         axis.text.y = element_blank(),
+         plot.tag = element_text(size = 30),
+         plot.tag.position = c(0.25, 0.85)) +
+   stat_summary(geom="line", fun = "median", group = "times", color="Navy", size=2, data = longlmaxmi0y)+
+   stat_summary(geom="line", fun = "median", group = "times", color="Green", size=2, data = longlmaxmi0o)
+
+cmlmi
+
+```
+
+
+# 50IT J48
+```{r}
+create_quantile_segment_frame <- function(data,idn,quantiles) {
+  dens <- data[data$id == idn,]$normalizer
+  ecdf <- stats::approxfun(dens,data[data$id == idn,]$times , ties = "ordered")
+  ys <- ecdf(quantiles) 
+} 
+```
+
+### face 50IT
+
+```{r, warning=FALSE}
+f50 <- data.frame(f50 = rep (NA, 1))
+for (id in 1: 48){
+     f50[,id] <- create_quantile_segment_frame(longfmaxmi,id, 0.5)
+     colnames(f50)[id]<-paste0(longfmaxmi [longfmaxmi $id == id,]$age)
+ 
+}
+f50<- pivot_longer(data = f50,
+                   cols = 1:47,
+                   names_to = "age",
+                   values_to = "n50it")
+
+f50$age <- as.numeric(unlist(kageo))
+```
+
+## house 50IT
+```{r, warning=FALSE}
+h50 <- data.frame(h50 = rep (NA, 1))
+for (id in 1: 48){
+     h50[,id] <- create_quantile_segment_frame(longhmaxmi,id, 0.5)
+     colnames(h50)[id]<-paste0(longhmaxmi [longhmaxmi $id == id,]$age)
+ 
+}
+h50<- pivot_longer(data = h50,
+                   cols = 1:47,
+                   names_to = "age",
+                   values_to = "n50it")
+
+h50$age <- as.numeric(unlist(kageo))
+```
+## letter 50IT
+```{r, warning=FALSE}
+l50 <- data.frame(l50 = rep (NA, 1))
+for (id in 1: 48){
+     l50[,id] <- create_quantile_segment_frame(longlmaxmi,id, 0.5)
+     colnames(l50)[id]<-paste0(longlmaxmi [longlmaxmi $id == id,]$age)
+ 
+}
+l50<- pivot_longer(data = l50,
+                   cols = 1:47,
+                   names_to = "age",
+                   values_to = "n50it")
+
+l50$age <- as.numeric(unlist(kageo))
+```
+
+
+
+# MODELLING regression line
+
+## face 
+```{r}
+modelftsr <- stsreg(x= f50$age,y= f50$n50it)
+
+
+plot48f<-ggplot(data = f50,aes(age, n50it))+
+  
+   geom_point()+ 
+  
+   geom_abline(intercept = modelftsr[["coef"]][1], slope = modelftsr[["coef"]][2],colour = "blue")+
+  
+   scale_color_viridis(discrete = FALSE, option = "D")+
+  
+   scale_x_continuous(name = "Age in Years",  
+
+                     breaks = seq(20, 80, 10)) + 
+
+   scale_y_continuous(name = "Face 50IT in ms",  
+
+                     breaks = seq(120, 300, 20), 
+                     limits = c(110, 300))+ 
+
+   theme_bw()+ 
+
+   theme(legend.position = "none")+
+   labs(tag="B")+
+   theme(plot.title = element_text(size=15),
+         axis.title.x  = element_text(size=15),
+         axis.title.y  = element_text(size=15),
+        plot.tag = element_text(size = 30),
+        plot.tag.position = c(0.3, 0.85))
+plot48f
+```
+## house
+```{r}
+modelhtsr <- stsreg(x = h50$age, y = h50$n50it)
+
+
+plot48h<-ggplot(data = h50,aes(age, n50it))+
+  
+   geom_point()+ 
+  
+   geom_abline(intercept = modelhtsr[["coef"]][1], slope = modelhtsr[["coef"]][2],colour = "red")+
+  
+   scale_color_viridis(discrete = FALSE, option = "D")+
+  
+   scale_x_continuous(name = "Age in Years",  
+
+                     breaks = seq(20, 80, 10)) + 
+
+   scale_y_continuous(name = "House 50IT in ms",  
+
+                     breaks = seq(120, 300, 20),
+                     limits = c(110, 300))+ 
+
+   theme_bw()+ 
+
+   theme(legend.position = "none")+
+   labs(tag ="C")+
+   theme(plot.title = element_text(size=15),
+         axis.title.x  = element_text(size=15),
+         axis.title.y  = element_text(size=15),
+        plot.tag = element_text(size = 30),
+        plot.tag.position = c(0.3, 0.85)) 
+plot48h
+```
+## letter
+```{r}
+modelltsr <- stsreg(x = l50$age, y = l50$n50it)
+
+
+plot48l<-ggplot(data = l50,aes(age, n50it))+
+  
+   geom_point()+ 
+  
+   geom_abline(intercept = modelltsr[["coef"]][1], slope = modelltsr[["coef"]][2], colour = "orange")+
+  
+   scale_color_viridis(discrete = FALSE, option = "D")+
+  
+  
+   scale_x_continuous(name = "Age in Years",  
+
+                     breaks = seq(20, 80, 10)) + 
+
+   scale_y_continuous(name = "Letter 50IT in ms",  
+
+                     breaks = seq(120, 300, 20), 
+                     limits = c(110, 300)) + 
+
+   theme_bw()+ 
+
+   theme(legend.position = "none")+
+   labs(tag = "D")+
+   theme(plot.title = element_text(size=15),
+         axis.title.x  = element_text(size=15),
+         axis.title.y  = element_text(size=15),
+        plot.tag = element_text(size = 30),
+        plot.tag.position = c(0.3, 0.85))
+plot48l
+
+```
+
+
+
+## bootstrap slope and different for bienick dataset and Jaworska dataset
+
+### boorstrap the slope for B120 face
+```{r}
+nboot <- 5000 # number of bootstrap samples
+
+boot.corrf120 <- vector(mode = "numeric", length = nboot)
+
+n_f120 <- 120
+xf120 <- as.numeric(unlist(a50[,1]))
+yf120 <- as.numeric(unlist(a50[,2]))
+
+for(B in 1:nboot){
+  boot.id <- sample(n_f120, size = n_f120, replace=TRUE) # bootstrap pairs of observations
+  boot.corrf120[B] <- stsreg(xf120[boot.id], yf120[boot.id])$coef[2] 
+}
+
+
+alpha <- 1-0.50 # arbitrary alpha value
+ci50f120 <- quantile(boot.corrf120, probs = c(alpha/2, 1-alpha/2))
+alpha <- 1-0.89 # arbitrary alpha value
+ci89f120 <- quantile(boot.corrf120, probs = c(alpha/2, 1-alpha/2))
+alpha <- 1-0.97 # arbitrary alpha value
+ci97f120 <- quantile(boot.corrf120, probs = c(alpha/2, 1-alpha/2))
+
+pvalf120 <- sum(boot.corrf120 < 0)/nboot
+pvalf120 <- 2 * min(pvalf120, 1 - pvalf120)
+```
+
+### boorstrap the slope for J48 face
+
+```{r}
+boot.corrf48 <- vector(mode = "numeric", length = nboot) # vector of bootstrap correlations
+
+n_f48 <- 48
+
+xf48 <- as.numeric(unlist(f50[,1]))
+yf48<- as.numeric(unlist(f50[,2]))
+
+for(C in 1:nboot){
+  boot.id <- sample(n_f48, size = n_f48, replace=TRUE) # bootstrap pairs of observations
+  boot.corrf48[C] <- stsreg(xf48[boot.id], yf48[boot.id])$coef[2] 
+}
+
+alpha <- 1-0.50 # arbitrary alpha value
+ci50f48 <- quantile(boot.corrf48, probs = c(alpha/2, 1-alpha/2))
+alpha <- 1-0.89 # arbitrary alpha value
+ci89f48 <- quantile(boot.corrf48, probs = c(alpha/2, 1-alpha/2))
+alpha <- 1-0.97 # arbitrary alpha value
+ci97f48 <- quantile(boot.corrf48, probs = c(alpha/2, 1-alpha/2))
+
+pvalf48 <- sum(boot.corrf48 < 0)/nboot
+pvalf48 <- 2 * min(pvalf48, 1 - pvalf48)
+```
+
+### boorstrap the slope for J48 house
+
+```{r}
+boot.corrh48 <- vector(mode = "numeric", length = nboot) # vector of bootstrap correlations
+n_h48 <- 48
+xh48 <- as.numeric(unlist(h50[,1]))
+yh48<- as.numeric(unlist(h50[,2]))
+for(D in 1:nboot){
+  boot.id <- sample(n_h48, size = n_h48, replace=TRUE) # bootstrap pairs of observations
+  boot.corrh48[D] <- stsreg(xh48[boot.id], yh48[boot.id])$coef[2]
+}
+
+alpha <- 1-0.50 # arbitrary alpha value
+ci50h48 <- quantile(boot.corrh48, probs = c(alpha/2, 1-alpha/2))
+alpha <- 1-0.89 # arbitrary alpha value
+ci89h48 <- quantile(boot.corrh48, probs = c(alpha/2, 1-alpha/2))
+alpha <- 1-0.97 # arbitrary alpha value
+ci97h48 <- quantile(boot.corrh48, probs = c(alpha/2, 1-alpha/2))
+
+pvalh48 <- sum(boot.corrh48 < 0)/nboot
+pvalh48 <- 2 * min(pvalh48, 1 - pvalh48)
+```
+
+### boorstrap the slope for J48 letter
+
+```{r}
+boot.corrl48 <- vector(mode = "numeric", length = nboot) # vector of bootstrap correlations
+n_l48 <- 48
+xl48 <- as.numeric(unlist(l50[,1]))
+yl48<- as.numeric(unlist(l50[,2]))
+for(E in 1:nboot){
+  boot.id <- sample(n_l48, size = n_l48, replace=TRUE) # bootstrap pairs of observations
+  boot.corrl48[E] <- stsreg(xl48[boot.id], yl48[boot.id])$coef[2]
+}
+
+alpha <- 1-0.50 # arbitrary alpha value
+ci50l48 <- quantile(boot.corrl48, probs = c(alpha/2, 1-alpha/2))
+alpha <- 1-0.89 # arbitrary alpha value
+ci89l48 <- quantile(boot.corrl48, probs = c(alpha/2, 1-alpha/2))
+alpha <- 1-0.97 # arbitrary alpha value
+ci97l48 <- quantile(boot.corrl48, probs = c(alpha/2, 1-alpha/2))
+
+pvall48 <- sum(boot.corrl48 < 0)/nboot
+pvall48 <- 2 * min(pvall48, 1 - pvall48)
+```
+
+### bootstrape slope comparsion between f120 and f48
+```{r}
+corf120 <- stsreg(xf120, yf120)$coef[2]
+corf48 <- stsreg(xf48, yf48)$coef[2]
+
+dff120 <- as_tibble(with(density(boot.corrf120),data.frame(x,y)))
+dff48 <- as_tibble(with(density(boot.corrf48),data.frame(x,y)))
+
+plotffslope <- ggplot() + theme_gar +
+    geom_vline(xintercept = corf120, size = 1, colour = "#ff3399") +
+    geom_line(aes(x = x, y = y),size = 2, colour = "pink", data = dff120) +
+    geom_vline(xintercept = corf48,  size = 1, colour = "darkblue") +
+    geom_line(aes(x = x, y = y),size = 2,colour = "blue", data = dff48)+
+    labs(tag = "A") +
+    scale_x_continuous(breaks = seq(-1, 2.5, 0.5)) +
+   scale_y_continuous(limits = c(0, 3))+
+    theme(axis.ticks.y = element_blank(),
+          axis.text.x = element_text(size=20),
+          axis.text.y = element_blank(),
+          axis.title.x = element_blank(),
+          axis.title.y = element_blank(),
+          legend.title = element_blank(),
+        plot.tag = element_text(size = 30),
+        plot.tag.position = c(0.1, 0.8)) +
+  # confidence intervals ----------------------
+  geom_segment(x = ci97f120[1], xend = ci97f120[2],
+             y = 0, yend = 0,
+             lineend = "round", size = 3, colour = "#990066", data = dff120) +
+  geom_segment(x = ci89f120[1], xend = ci89f120[2],
+               y = 0, yend = 0,
+               lineend = "round", size = 3, colour = "#ff33cc", data = dff120) +
+  geom_segment(x = ci50f120[1], xend = ci50f120[2],
+               y = 0, yend = 0,
+               lineend = "round", size = 3, colour = "#ff99cc", data = dff120)  +
+  # confidence intervals ----------------------
+  geom_segment(x = ci97f48[1], xend = ci97f48[2],
+             y = 0.1, yend = 0.1,
+             lineend = "round", size = 3, colour = "darkblue", data = dff48) +
+  geom_segment(x = ci89f48[1], xend = ci89f48[2],
+               y = 0.10, yend = 0.10,
+               lineend = "round", size = 3, colour = "#3399FF", data = dff48) +
+  geom_segment(x = ci50f48[1], xend = ci50f48[2],
+               y = 0.10, yend = 0.10,
+               lineend = "round", size = 3, colour = "lightblue", data = dff48) 
+plotffslope
+ggsave("plotffslope.png")
+```
+
+
+### bootstrape slope comparsion between h48 and f48
+```{r}
+corh48 <- stsreg(xh48, yh48)$coef[2]
+corf48 <- stsreg(xf48, yf48)$coef[2]
+
+dfh48 <- as_tibble(with(density(boot.corrh48),data.frame(x,y)))
+dff48 <- as_tibble(with(density(boot.corrf48),data.frame(x,y)))
+
+plotfhslope <- ggplot() + theme_gar +
+    geom_vline(xintercept = corh48,  size = 1,colour = "#cc0000") +
+    geom_line(aes(x = x, y = y),size = 2,colour = "red", data = dfh48) +
+    geom_vline(xintercept = corf48, size = 1,colour = "darkblue") +
+    geom_line(aes(x = x, y = y),size = 2,colour = "blue", data = dff48) +
+    labs(tag = "B")  +
+    scale_x_continuous(breaks = seq(-1, 2.5, 0.5)) +
+   scale_y_continuous(limits = c(0, 3))+
+    theme(axis.ticks.y = element_blank(),
+          axis.text.x = element_text(size=20),
+          axis.text.y = element_blank(),
+          axis.title.x = element_blank(),
+          axis.title.y = element_blank(),
+          legend.title = element_blank(),
+        plot.tag = element_text(size = 30),
+        plot.tag.position = c(0.1, 0.8))+
+  # confidence intervals ----------------------
+  geom_segment(x = ci97h48[1], xend = ci97h48[2],
+             y = 0, yend = 0,
+             lineend = "round", size = 3, colour = "darkred", data = dfh48) +
+  geom_segment(x = ci89h48[1], xend = ci89h48[2],
+               y = 0, yend = 0,
+               lineend = "round", size = 3, colour = "#CC0000", data = dfh48) +
+  geom_segment(x = ci50h48[1], xend = ci50h48[2],
+               y = 0, yend = 0,
+               lineend = "round", size = 3, colour = "#FF0000", data = dfh48)  +
+  # confidence intervals ----------------------
+  geom_segment(x = ci97f48[1], xend = ci97f48[2],
+             y = 0.1, yend = 0.1,
+             lineend = "round", size = 3, colour = "darkblue", data = dff48) +
+  geom_segment(x = ci89f48[1], xend = ci89f48[2],
+               y = 0.10, yend = 0.10,
+               lineend = "round", size = 3, colour = "#3399FF", data = dff48) +
+  geom_segment(x = ci50f48[1], xend = ci50f48[2],
+               y = 0.10, yend = 0.10,
+               lineend = "round", size = 3, colour = "lightblue", data = dff48)
+
+plotfhslope
+ggsave("plotfhslope.png")
+```
+
+
+### bootstrape slope comparsion between l48 and f48
+```{r}
+corl48 <- stsreg(xl48, yl48)$coef[2]
+corf48 <- stsreg(xf48, yf48)$coef[2]
+
+dfl48 <- as_tibble(with(density(boot.corrl48),data.frame(x,y)))
+dff48 <- as_tibble(with(density(boot.corrf48),data.frame(x,y)))
+
+plotflslope <- ggplot() + theme_gar +
+    geom_vline(xintercept = corl48,  size = 1,colour = "#ff6600") +
+    geom_line(aes(x = x, y = y),size = 2,colour = "orange", data = dfl48) +
+    geom_vline(xintercept = corf48,  size = 1,colour = "darkblue") +
+    geom_line(aes(x = x, y = y),size = 2,colour = "blue", data = dff48) +
+    labs(tag = "C")  +
+    scale_x_continuous(breaks = seq(-1, 2, 0.5)) +
+     scale_y_continuous(limits = c(0, 3))+
+    theme(axis.ticks.y = element_blank(),
+          axis.text.x = element_text(size=20),
+          axis.text.y = element_blank(),
+          axis.title.x = element_blank(),
+          axis.title.y = element_blank(),
+          legend.title = element_blank(),
+        plot.tag = element_text(size = 30),
+        plot.tag.position = c(0.1, 0.8)) +
+  # confidence intervals ----------------------
+  geom_segment(x = ci97l48[1], xend = ci97l48[2],
+             y = 0, yend = 0,
+             lineend = "round", size = 3, colour = "#FF3300", data = dfh48) +
+  geom_segment(x = ci89l48[1], xend = ci89l48[2],
+               y = 0, yend = 0,
+               lineend = "round", size = 3, colour = "#ff6600", data = dfh48) +
+  geom_segment(x = ci50l48[1], xend = ci50l48[2],
+               y = 0, yend = 0,
+               lineend = "round", size = 3, colour = "#FF9900", data = dfh48)  +
+  # confidence intervals ----------------------
+  geom_segment(x = ci97f48[1], xend = ci97f48[2],
+             y = 0.1, yend = 0.1,
+             lineend = "round", size = 3, colour = "darkblue", data = dff48) +
+  geom_segment(x = ci89f48[1], xend = ci89f48[2],
+               y = 0.10, yend = 0.10,
+               lineend = "round", size = 3, colour = "#3399FF", data = dff48) +
+  geom_segment(x = ci50f48[1], xend = ci50f48[2],
+               y = 0.10, yend = 0.10,
+               lineend = "round", size = 3, colour = "lightblue", data = dff48)
+
+plotflslope
+ggsave("plotflslope.png")
+```
+
+### bootstrape slope comparsion between l48 and h48
+```{r}
+corl48 <- stsreg(xl48, yl48)$coef[2]
+corh48 <- stsreg(xh48, yh48)$coef[2]
+
+dfl48 <- as_tibble(with(density(boot.corrl48),data.frame(x,y)))
+dfh48 <- as_tibble(with(density(boot.corrh48),data.frame(x,y)))
+
+plothlslope <- ggplot() + theme_gar +
+    geom_vline(xintercept = corl48, size = 1, colour = "#ff6600") +
+    geom_line(aes(x = x, y = y),size = 2, colour = "orange", data = dfl48) +
+    geom_vline(xintercept = corh48,  size = 1, colour = "#cc0000") +
+    geom_line(aes(x = x, y = y),size = 2, colour = "red", data = dfh48) +
+    labs(tag = "D")  +
+    scale_x_continuous(breaks = seq(-1, 2.5, 0.5)) +
+     scale_y_continuous(limits = c(0, 3))+
+    theme(axis.ticks.y = element_blank(),
+          axis.text.x = element_text(size=20),
+          axis.text.y = element_blank(),
+          axis.title.x = element_blank(),
+          axis.title.y = element_blank(),
+          legend.title = element_blank(),
+        plot.tag = element_text(size = 30),
+        plot.tag.position = c(0.1, 0.8)) +
+  # confidence intervals ----------------------
+  geom_segment(x = ci97l48[1], xend = ci97l48[2],
+             y = 0, yend = 0,
+             lineend = "round", size = 3, colour = "#FF3300", data = dfh48) +
+  geom_segment(x = ci89l48[1], xend = ci89l48[2],
+               y = 0, yend = 0,
+               lineend = "round", size = 3, colour = "#ff6600", data = dfh48) +
+  geom_segment(x = ci50l48[1], xend = ci50l48[2],
+               y = 0, yend = 0,
+               lineend = "round", size = 3, colour = "#FF9900", data = dfh48)  +
+  # confidence intervals ----------------------
+  geom_segment(x = ci97h48[1], xend = ci97h48[2],
+             y = 0.1, yend = 0.1,
+             lineend = "round", size = 3, colour = "darkred", data = dff48) +
+  geom_segment(x = ci89h48[1], xend = ci89h48[2],
+               y = 0.10, yend = 0.10,
+               lineend = "round", size = 3, colour = "#CC0000", data = dff48) +
+  geom_segment(x = ci50h48[1], xend = ci50h48[2],
+               y = 0.10, yend = 0.10,
+               lineend = "round", size = 3, colour = "#FF0000", data = dff48)
+
+plothlslope
+ggsave("plothlslope.png")
+```
+
+### boorstrap the difference between slope of bienick dataset and Jaworska dataset
+
+```{r}
+set.seed(21)
+nboot <- 5000 # number of bootstrap samples
+alpha <- 0.05 # alpha level for confidence interval
+boot.diff <- vector(mode = "numeric", length = nboot) # vector of bootstrap correlations
+for(B in 1:nboot){
+  boot.id1 <- sample(n_f120, size = n_f120, replace=TRUE) # bootstrap pairs of observations in group 1
+  boot.id2 <- sample(n_f48, size = n_f48, replace=TRUE) # bootstrap pairs of observations in group 2
+  boot.diff[B] <- stsreg(xf120[boot.id1], yf120[boot.id1])$coef[2] - stsreg(xf48[boot.id2], yf48[boot.id2])$coef[2]
+}
+
+pval <- sum(boot.diff < 0)/nboot
+pval <- 2 * min(pval, 1 - pval) 
+
+aav <- 1-0.50 # arbitrary alpha value
+ci50 <- quantile(boot.diff, probs = c(aav/2, 1-aav/2))
+aav <- 1-0.89 # arbitrary alpha value
+ci89 <- quantile(boot.diff, probs = c(aav/2, 1-aav/2))
+aav <- 1-0.97 # arbitrary alpha value
+ci97 <- quantile(boot.diff, probs = c(aav/2, 1-aav/2))
+
+corr.diff <- stsreg(xf120, yf120)$coef[2] - stsreg(xf48, yf48)$coef[2]
+
+df <- as_tibble(with(density(boot.diff), data.frame(x,y)))
+
+plotffslopediff<-ggplot(df, aes(x = x, y = y)) + theme_gar +
+  geom_line(size = 2, show.legend=FALSE) +
+  geom_vline(xintercept = 0, colour = "black", linetype = "dashed", size = 1) +
+  geom_vline(xintercept = corr.diff, colour = "black", size = 1) +
+  scale_x_continuous(breaks = seq(-1, 2, 0.5)) +
+  scale_y_continuous(limits = c(0, 3))+
+  labs(x = "F120 vs F48") +
+  theme(axis.ticks.y = element_blank(),
+        axis.text.x = element_text(size=20),
+        axis.text.y = element_blank(),
+        axis.title.x  = element_text(size=20),
+        axis.title.y  = element_blank()) +
+  # confidence intervals ----------------------
+  geom_segment(x = ci97[1], xend = ci97[2],
+             y = 0, yend = 0,
+             lineend = "round", size = 5, colour = "black") +
+  geom_segment(x = ci89[1], xend = ci89[2],
+               y = 0, yend = 0,
+               lineend = "round", size = 5, colour = "darkgrey") +
+  geom_segment(x = ci50[1], xend = ci50[2],
+               y = 0, yend = 0,
+               lineend = "round", size = 5, colour = "lightgrey") 
+
+plotffslopediff
+
+ggsave("plotffslopediff.png",width = 7, height = 7)
+
+```
+
+### boorstrap the difference between slope of Face and House in Jaworska dataset
+
+```{r}
+set.seed(21)
+
+boot.difffh <- vector(mode = "numeric", length = nboot) # vector of bootstrap correlations
+for(B in 1:nboot){
+  boot.id1 <- sample(n_h48, size = n_f48, replace=TRUE) # bootstrap pairs of observations in group 1
+  boot.id2 <- sample(n_f48, size = n_h48, replace=TRUE) # bootstrap pairs of observations in group 2
+  boot.difffh[B] <- stsreg(xh48[boot.id1], yh48[boot.id1])$coef[2] - stsreg(xf48[boot.id2], yf48[boot.id2])$coef[2]
+}
+
+pvalfh <- sum(boot.difffh < 0)/nboot
+pvalfh <- 2 * min(pvalfh, 1 - pvalfh) 
+
+aav <- 1-0.50 # arbitrary alpha value
+ci50fh <- quantile(boot.difffh, probs = c(aav/2, 1-aav/2))
+aav <- 1-0.89 # arbitrary alpha value
+ci89fh <- quantile(boot.difffh, probs = c(aav/2, 1-aav/2))
+aav <- 1-0.97 # arbitrary alpha value
+ci97fh <- quantile(boot.difffh, probs = c(aav/2, 1-aav/2))
+
+corr.difffh <- stsreg(xh48, yh48)$coef[2] - stsreg(xf48, yf48)$coef[2]
+
+dffh <- as_tibble(with(density(boot.difffh), data.frame(x,y)))
+
+plotfhslopediff<-ggplot(dffh, aes(x = x, y = y)) + theme_gar +
+  geom_line(size = 2, show.legend=FALSE) +
+  geom_vline(xintercept = 0, colour = "black", linetype = "dashed", size = 1) +
+  geom_vline(xintercept = corr.difffh, colour = "black", size = 1) +
+  scale_x_continuous(breaks = seq(-2, 2.5, 0.5)) +
+  scale_y_continuous(limits = c(0, 3))+
+  labs(x = "H48 vs F48") +
+  theme(axis.ticks.y = element_blank(),
+        axis.text.x = element_text(size=20),
+        axis.text.y = element_blank(),
+        axis.title.x  = element_text(size=20),
+        axis.title.y  = element_blank()) +
+  # confidence intervals ----------------------
+  geom_segment(x = ci97fh[1], xend = ci97fh[2],
+             y = 0, yend = 0,
+             lineend = "round", size = 5, colour = "black") +
+  geom_segment(x = ci89fh[1], xend = ci89fh[2],
+               y = 0, yend = 0,
+               lineend = "round", size = 5, colour = "darkgrey") +
+  geom_segment(x = ci50fh[1], xend = ci50fh[2],
+               y = 0, yend = 0,
+               lineend = "round", size = 5, colour = "lightgrey") 
+
+plotfhslopediff
+
+ggsave("plotfhslopediff.png")
+
+```
+
+### boorstrap the difference between slope of Face and Letter in Jaworska dataset
+
+```{r}
+set.seed(21)
+
+boot.difffl <- vector(mode = "numeric", length = nboot) # vector of bootstrap correlations
+for(B in 1:nboot){
+  boot.id1 <- sample(n_l48, size = n_l48, replace=TRUE) # bootstrap pairs of observations in group 1
+  boot.id2 <- sample(n_f48, size = n_f48, replace=TRUE) # bootstrap pairs of observations in group 2
+  boot.difffl[B] <- stsreg(xl48[boot.id1], yl48[boot.id1])$coef[2] - stsreg(xf48[boot.id2], yf48[boot.id2])$coef[2]
+}
+
+pvalfl <- sum(boot.difffl < 0)/nboot
+pvalfl <- 2 * min(pvalfl, 1 - pvalfl) 
+
+aav <- 1-0.50 # arbitrary alpha value
+ci50fl <- quantile(boot.difffl, probs = c(aav/2, 1-aav/2))
+aav <- 1-0.89 # arbitrary alpha value
+ci89fl <- quantile(boot.difffl, probs = c(aav/2, 1-aav/2))
+aav <- 1-0.97 # arbitrary alpha value
+ci97fl <- quantile(boot.difffl, probs = c(aav/2, 1-aav/2))
+
+corr.difffl <- stsreg(xl48, yl48)$coef[2] - stsreg(xf48, yf48)$coef[2]
+
+dffl <- as_tibble(with(density(boot.difffl), data.frame(x,y)))
+
+plotflslopediff<-ggplot(dffl, aes(x = x, y = y)) + theme_gar +
+  geom_line(size = 2, show.legend=FALSE) +
+  geom_vline(xintercept = 0, colour = "black", linetype = "dashed", size = 1) +
+  geom_vline(xintercept = corr.difffl, colour = "black", size = 1) +
+  scale_x_continuous(breaks = seq(-2.5, 2, 0.5)) +
+  scale_y_continuous(limits = c(0, 3))+
+  labs(x = "L48 vs F48") +
+  theme(axis.ticks.y = element_blank(),
+        axis.text.x = element_text(size=20),
+        axis.text.y = element_blank(),
+        axis.title.x  = element_text(size=20),
+        axis.title.y  = element_blank()) +
+  # confidence intervals ----------------------
+  geom_segment(x = ci97fl[1], xend = ci97fl[2],
+             y = 0, yend = 0,
+             lineend = "round", size = 5, colour = "black") +
+  geom_segment(x = ci89fl[1], xend = ci89fl[2],
+               y = 0, yend = 0,
+               lineend = "round", size = 5, colour = "darkgrey") +
+  geom_segment(x = ci50fl[1], xend = ci50fl[2],
+               y = 0, yend = 0,
+               lineend = "round", size = 5, colour = "lightgrey") 
+
+plotflslopediff
+
+ggsave("plotflslopediff.png")
+
+```
+
+### boorstrap the difference between slope of House and Letter in Jaworska dataset
+
+```{r}
+set.seed(21)
+
+boot.diffhl <- vector(mode = "numeric", length = nboot) # vector of bootstrap correlations
+for(B in 1:nboot){
+  boot.id1 <- sample(n_l48, size = n_l48, replace=TRUE) # bootstrap pairs of observations in group 1
+  boot.id2 <- sample(n_h48, size = n_h48, replace=TRUE) # bootstrap pairs of observations in group 2
+  boot.diffhl[B] <- stsreg(xl48[boot.id1], yl48[boot.id1])$coef[2] - stsreg(xh48[boot.id2], yh48[boot.id2])$coef[2]
+}
+
+pvalhl <- sum(boot.diffhl < 0)/nboot
+pvalhl <- 2 * min(pvalhl, 1 - pvalhl) 
+
+aav <- 1-0.50 # arbitrary alpha value
+ci50hl <- quantile(boot.diffhl, probs = c(aav/2, 1-aav/2))
+aav <- 1-0.89 # arbitrary alpha value
+ci89hl <- quantile(boot.diffhl, probs = c(aav/2, 1-aav/2))
+aav <- 1-0.97 # arbitrary alpha value
+ci97hl <- quantile(boot.diffhl, probs = c(aav/2, 1-aav/2))
+
+corr.diffhl <- stsreg(xl48, yl48)$coef[2] - stsreg(xh48, yh48)$coef[2]
+
+dfhl <- as_tibble(with(density(boot.diffhl), data.frame(x,y)))
+
+plothlslopediff<-ggplot(dfhl, aes(x = x, y = y)) + theme_gar +
+  geom_line(size = 2, show.legend=FALSE) +
+  geom_vline(xintercept = 0, colour = "black", linetype = "dashed", size = 1) +
+  geom_vline(xintercept = corr.diffhl, colour = "black", size = 1) +
+  scale_x_continuous(breaks = seq(-1, 2, 0.5)) +
+  scale_y_continuous(limits = c(0, 3))+
+  labs(x = "L48 vs H48") +
+  theme(axis.ticks.y = element_blank(),
+        axis.text.x = element_text(size=20),
+        axis.text.y = element_blank(),
+        axis.title.x  = element_text(size=20),
+        axis.title.y  = element_blank()) +
+  # confidence intervals ----------------------
+  geom_segment(x = ci97hl[1], xend = ci97hl[2],
+             y = 0, yend = 0,
+             lineend = "round", size = 5, colour = "black") +
+  geom_segment(x = ci89hl[1], xend = ci89hl[2],
+               y = 0, yend = 0,
+               lineend = "round", size = 5, colour = "darkgrey") +
+  geom_segment(x = ci50hl[1], xend = ci50hl[2],
+               y = 0, yend = 0,
+               lineend = "round", size = 5, colour = "lightgrey") 
+
+plothlslopediff
+
+ggsave("plothlslopediff.png")
+
+```
+
+
+# 50IT comparison between face vs house
+
+
+```{r}
+dffh <- as.data.frame(cbind(f50, h50$n50it))
+colnames(dffh)[2]<- 'Face'
+colnames(dffh)[3]<- 'House'
+
+dffhy <- dffh |>
+  subset(age <= 39)
+
+dffho <- dffh |>
+  subset(age >= 59)
+
+fhmin.x=NA
+fhmin.y=NA
+fhmax.x=NA
+fhmax.y=NA
+
+fhmin.xy=NA
+fhmin.yy=NA
+fhmax.xy=NA
+fhmax.yy=NA
+
+
+fhmin.xo=NA
+fhmin.yo=NA
+fhmax.xo=NA
+fhmax.yo=NA
+
+fhhdy1.5<-hd(dffhy[,2],.5)
+
+fhhdy2.5<-hd(dffhy[,3],.5)
+
+fhdfy.5<-data.frame(fhhdy1=fhhdy1.5,fhhdy2=fhhdy2.5)
+
+
+fhhdo1.5<-hd(dffho[,2],.5)
+
+fhhdo2.5<-hd(dffho[,3],.5)
+
+fhdfo.5<-data.frame(fhhdo1=fhhdo1.5,fhhdo2=fhhdo2.5)
+
+
+if (is.na(fhmin.x)){
+fhmin.x <- min(dffh[,2],dffh[,3])
+}
+if (is.na(fhmax.x)){
+fhmax.x <- max(dffh[,2],dffh[,3])
+}
+if (is.na(fhmin.y)){
+fhmin.y <- min(dffh[,2],dffh[,3])
+}
+if (is.na(fhmax.y)){
+fhmax.y <- max(dffh[,2],dffh[,3])
+}
+
+
+if (is.na(fhmin.xo)){
+fhmin.xo <- min(dffho[,2],dffho[,3])
+}
+if (is.na(fhmax.xo)){
+fhmax.xo <- max(dffho[,2],dffho[,3])
+}
+if (is.na(fhmin.yo)){
+fhmin.yo <- min(dffho[,2],dffho[,3])
+}
+if (is.na(fhmax.yo)){
+fhmax.yo <- max(dffho[,2],dffho[,3])
+}
+
+if (is.na(fhmin.xy)){
+fhmin.xy <- min(dffhy[,2],dffhy[,3])
+}
+if (is.na(fhmax.xy)){
+fhmax.xy <- max(dffhy[,2],dffhy[,3])
+}
+if (is.na(fhmin.yy)){
+fhmin.yy <- min(dffhy[,2],dffhy[,3])
+}
+if (is.na(fhmax.yy)){
+fhmax.yy <- max(dffhy[,2],dffhy[,3])
+}
+
+axis.steps=25
+# scatterplot of paired observations -----------------
+plotfh <- ggplot() +
+  geom_abline(intercept = 0) +
+  geom_point(aes(x = Face, y = House),size=5,stroke=1,shape=21,colour="black",fill="green",alpha=.5, data = dffho) +
+  geom_point(aes(x = Face, y = House),size=5,stroke=1,shape=21,colour="black",fill="navy",alpha=.5, data = dffhy) +
+  theme_bw() +
+  theme(axis.text.x = element_text(colour="grey20",size=16),
+        axis.text.y = element_text(colour="grey20",size=16),
+        axis.title.x = element_text(colour="grey20",size=18),
+        axis.title.y = element_text(colour="grey20",size=18),
+        legend.title = element_blank(),
+        plot.title = element_text(colour="grey20",size=20),
+         plot.tag = element_text(size = 30),
+         plot.tag.position = c(0.25, 0.85)) +
+  labs(tag = "A") +
+  scale_x_continuous(limits=c(floor(fhmin.x), ceiling(fhmax.x)),breaks=seq(floor(fhmin.x),ceiling(fhmax.x),axis.steps)) +
+  scale_y_continuous(limits=c(floor(fhmin.y), ceiling(fhmax.y)),breaks=seq(floor(fhmin.y),ceiling(fhmax.y),axis.steps)) +
+  geom_segment(aes(x=fhhdo1,y=fhmin.yo,xend=fhhdo1,yend=fhhdo2),data=fhdfo.5,linetype="dashed",size=2,alpha=1,colour="green")  +
+  geom_segment(aes(x=fhmin.xo,y=fhhdo2,xend=fhhdo1,yend=fhhdo2),data=fhdfo.5,linetype="dashed",size=2,alpha=1,colour="green") +
+  geom_segment(aes(x=fhhdy1,y=fhmin.yy,xend=fhhdy1,yend=fhhdy2),data=fhdfy.5,linetype="dashed",size=2,alpha=1,colour="navy")  +
+  geom_segment(aes(x=fhmin.xy,y=fhhdy2,xend=fhhdy1,yend=fhhdy2),data=fhdfy.5,linetype="dashed",size=2,alpha=1,colour="navy") 
+
+plotfh
+
+```
+
+
+# 50IT comparison between face vs letter
+```{r}
+dffl <- as.data.frame(cbind(f50, l50$n50it))
+
+colnames(dffl)[2]<- 'Face'
+colnames(dffl)[3]<- 'Letter'
+
+dffly <- dffl |>
+  subset(age <= 39)
+
+dfflo <- dffl |>
+  subset(age >= 59)
+
+flmin.x=NA
+flmin.y=NA
+flmax.x=NA
+flmax.y=NA
+
+flmin.xy=NA
+flmin.yy=NA
+flmax.xy=NA
+flmax.yy=NA
+
+
+flmin.xo=NA
+flmin.yo=NA
+flmax.xo=NA
+flmax.yo=NA
+
+flhdy1.5<-hd(dffly[,2],.5)
+
+flhdy2.5<-hd(dffly[,3],.5)
+
+fldfy.5<-data.frame(flhdy1=flhdy1.5,flhdy2=flhdy2.5)
+
+
+flhdo1.5<-hd(dfflo[,2],.5)
+
+flhdo2.5<-hd(dfflo[,3],.5)
+
+fldfo.5<-data.frame(flhdo1=flhdo1.5,flhdo2=flhdo2.5)
+
+
+if (is.na(flmin.x)){
+flmin.x <- min(dffl[,2],dffl[,3])
+}
+if (is.na(flmax.x)){
+flmax.x <- max(dffl[,2],dffl[,3])
+}
+if (is.na(flmin.y)){
+flmin.y <- min(dffl[,2],dffl[,3])
+}
+if (is.na(flmax.y)){
+flmax.y <- max(dffl[,2],dffl[,3])
+}
+
+
+if (is.na(flmin.xo)){
+flmin.xo <- min(dfflo[,2],dfflo[,3])
+}
+if (is.na(flmax.xo)){
+flmax.xo <- max(dfflo[,2],dfflo[,3])
+}
+if (is.na(flmin.yo)){
+flmin.yo <- min(dfflo[,2],dfflo[,3])
+}
+if (is.na(flmax.yo)){
+flmax.yo <- max(dfflo[,2],dfflo[,3])
+}
+
+if (is.na(flmin.xy)){
+flmin.xy <- min(dffly[,2],dffly[,3])
+}
+if (is.na(flmax.xy)){
+flmax.xy <- max(dffly[,2],dffly[,3])
+}
+if (is.na(flmin.yy)){
+flmin.yy <- min(dffly[,2],dffly[,3])
+}
+if (is.na(flmax.yy)){
+flmax.yy <- max(dffly[,2],dffly[,3])
+}
+
+axis.steps=25
+# scatterplot of paired observations -----------------
+plotfl <- ggplot() +
+  geom_abline(intercept = 0) +
+  geom_point(aes(x = Face, y = Letter),size=5,stroke=1,shape=21,colour="black",fill="green",alpha=.5, data = dfflo) +
+  geom_point(aes(x = Face, y = Letter),size=5,stroke=1,shape=21,colour="black",fill="navy",alpha=.5, data = dffly) +
+  theme_bw() +
+  theme(axis.text.x = element_text(colour="grey20",size=16),
+        axis.text.y = element_text(colour="grey20",size=16),
+        axis.title.x = element_text(colour="grey20",size=18),
+        axis.title.y = element_text(colour="grey20",size=18),
+        legend.title = element_blank(),
+        plot.title = element_text(colour="grey20",size=20),
+         plot.tag = element_text(size = 30),
+         plot.tag.position = c(0.25, 0.85)) +
+  labs(tag = "B") +
+  scale_x_continuous(limits=c(floor(flmin.x), ceiling(flmax.x)),breaks=seq(floor(flmin.x),ceiling(flmax.x),axis.steps)) +
+  scale_y_continuous(limits=c(floor(flmin.y), ceiling(flmax.y)),breaks=seq(floor(flmin.y),ceiling(flmax.y),axis.steps)) +
+  geom_segment(aes(x=flhdo1,y=flmin.yo,xend=flhdo1,yend=flhdo2),data=fldfo.5,linetype="dashed",size=2,alpha=1,colour="green") +
+  geom_segment(aes(x=flmin.xo,y=flhdo2,xend=flhdo1,yend=flhdo2),data=fldfo.5,linetype="dashed",size=2,alpha=1,colour="green") +
+  geom_segment(aes(x=flhdy1,y=flmin.yy,xend=flhdy1,yend=flhdy2),data=fldfy.5,linetype="dashed",size=2,alpha=1,colour="navy") +
+  geom_segment(aes(x=flmin.xy,y=flhdy2,xend=flhdy1,yend=flhdy2),data=fldfy.5,linetype="dashed",size=2,alpha=1,colour="navy") 
+
+plotfl
+```
+
+# 50IT comparison between house vs letter
+```{r}
+dfhl <- as.data.frame(cbind(h50, l50$n50it))
+colnames(dfhl)[2]<- 'House'
+colnames(dfhl)[3]<- 'Letter'
+
+dfhly <- dfhl |>
+  subset(age <= 39)
+
+dfhlo <- dfhl |>
+  subset(age >= 59)
+
+
+hlmin.x=NA
+hlmin.y=NA
+hlmax.x=NA
+hlmax.y=NA
+
+hlmin.xy=NA
+hlmin.yy=NA
+hlmax.xy=NA
+hlmax.yy=NA
+
+
+hlmin.xo=NA
+hlmin.yo=NA
+hlmax.xo=NA
+hlmax.yo=NA
+
+hlhdy1.5<-hd(dfhly[,2],.5)
+
+hlhdy2.5<-hd(dfhly[,3],.5)
+
+hldfy.5<-data.frame(hlhdy1=hlhdy1.5,hlhdy2=hlhdy2.5)
+
+
+hlhdo1.5<-hd(dfhlo[,2],.5)
+
+hlhdo2.5<-hd(dfhlo[,3],.5)
+
+hldfo.5<-data.frame(hlhdo1=hlhdo1.5,hlhdo2=hlhdo2.5)
+
+
+if (is.na(hlmin.x)){
+hlmin.x <- min(dfhl[,2],dfhl[,3])
+}
+if (is.na(hlmax.x)){
+hlmax.x <- max(dfhl[,2],dfhl[,3])
+}
+if (is.na(hlmin.y)){
+hlmin.y <- min(dfhl[,2],dfhl[,3])
+}
+if (is.na(hlmax.y)){
+hlmax.y <- max(dfhl[,2],dfhl[,3])
+}
+
+
+if (is.na(hlmin.xo)){
+hlmin.xo <- min(dfhlo[,2],dfhlo[,3])
+}
+if (is.na(hlmax.xo)){
+hlmax.xo <- max(dfhlo[,2],dfhlo[,3])
+}
+if (is.na(hlmin.yo)){
+hlmin.yo <- min(dfhlo[,2],dfhlo[,3])
+}
+if (is.na(hlmax.yo)){
+hlmax.yo <- max(dfhlo[,2],dfhlo[,3])
+}
+
+if (is.na(hlmin.xy)){
+hlmin.xy <- min(dfhly[,2],dfhly[,3])
+}
+if (is.na(hlmax.xy)){
+hlmax.xy <- max(dfhly[,2],dfhly[,3])
+}
+if (is.na(hlmin.yy)){
+hlmin.yy <- min(dfhly[,2],dfhly[,3])
+}
+if (is.na(hlmax.yy)){
+hlmax.yy <- max(dfhly[,2],dfhly[,3])
+}
+
+axis.steps=25
+# scatterplot of paired observations -----------------
+plothl <- ggplot() +
+  geom_abline(intercept = 0) +
+  geom_point(aes(x = House, y = Letter),size=5,stroke=1,shape=21,colour="black",fill="green",alpha=.5, data = dfhlo) +
+  geom_point(aes(x = House, y = Letter),size=5,stroke=1,shape=21,colour="black",fill="navy",alpha=.5, data = dfhly) +
+  theme_bw() +
+  theme(axis.text.x = element_text(colour="grey20",size=16),
+        axis.text.y = element_text(colour="grey20",size=16),
+        axis.title.x = element_text(colour="grey20",size=18),
+        axis.title.y = element_text(colour="grey20",size=18),
+        legend.title = element_blank(),
+        plot.title = element_text(colour="grey20",size=20),
+         plot.tag = element_text(size = 30),
+         plot.tag.position = c(0.25, 0.85)) +
+  labs(tag = "C") +
+  scale_x_continuous(limits=c(floor(hlmin.x), ceiling(hlmax.x)),breaks=seq(floor(hlmin.x),ceiling(hlmax.x),axis.steps)) +
+  scale_y_continuous(limits=c(floor(hlmin.y), ceiling(hlmax.y)),breaks=seq(floor(hlmin.y),ceiling(hlmax.y),axis.steps)) +
+  geom_segment(aes(x=hlhdy1,y=hlmin.yy,xend=hlhdy1,yend=hlhdy2),data=hldfy.5,linetype="dashed",size=2,alpha=1,colour="navy")+
+  geom_segment(aes(x=hlmin.xy,y=hlhdy2,xend=hlhdy1,yend=hlhdy2),data=hldfy.5,linetype="dashed",size=2,alpha=1,colour="navy") +
+  geom_segment(aes(x=hlhdo1,y=hlmin.yo,xend=hlhdo1,yend=hlhdo2),data=hldfo.5,linetype="dashed",size=2,alpha=1,colour="green")  +
+  geom_segment(aes(x=hlmin.xo,y=hlhdo2,xend=hlhdo1,yend=hlhdo2),data=hldfo.5,linetype="dashed",size=2,alpha=1,colour="green") 
+
+plothl
+```
+# combine different plot
+
+```{r}
+combined_plot <- ggarrange(plot120tsr,
+                           plot48f,
+                           plot48h,
+                           plot48l,
+                           nrow = 2,
+                           ncol = 2)
+
+ggsave("combined_plot.png")
+```
+
+```{r}
+combined_plot2 <- ggarrange(
+                           plotfh,
+                           plotfl,
+                           plothl,
+                           nrow = 1,
+                           ncol = 3)
+
+ggsave("combined_plot2.png",width = 18, height = 7)
+```
+
+```{r}
+combined_plot3 <- ggarrange(
+                           cmfmi120,
+                           cmfmi,
+                           cmhmi,
+                           cmlmi,
+                           nrow = 2,
+                           ncol = 2)
+
+ggsave("combined_plot3.png",width = 15, height = 15)
+```
+
+```{r}
+combined_plot4 <- ggarrange(
+                           fmi120,
+                           fmi,
+                           hmi,
+                           lmi,
+                           nrow = 2,
+                           ncol = 2)
+
+ggsave("combined_plot4.png",width = 22, height = 15)
+```
+
+```{r}
+combined_plot5<-ggarrange(
+  plotffslope,
+  plotfhslope,
+  plotflslope,
+  plothlslope,
+  plotffslopediff,
+  plotfhslopediff,
+  plotflslopediff,
+  plothlslopediff,
+  nrow = 2,
+  ncol = 4
+)
+
+ggsave("combined_plot5.png",width = 20, height = 10)
+
+```
+
+```{r}
+combined_plot6<-ggarrange(
+  AgeweightedMI,
+  ggarrange(fmimedian, hmimedian, lmimedian,  ncol = 3),
+  nrow = 2
+)
+ggsave("combined_plot6.png",width = 20, height = 20)
+```
+
+## evaluation plot: seperate B120 into two age group (B97)
+### preprocess
+```{r}
+
+a50y <- a50 |>
+  subset(age <= 39)
+
+a50o <- a50 |>
+  subset(age >= 59)
+
+a50oy <- rbind(a50y,a50o)
+  
+modela50oy <- stsreg(x=a50oy$age,y=a50oy$rn50it)
+
+```
+
+### slope plot
+
+```{r}
+plota50oy<-ggplot(data = a50oy,aes(age, rn50it))+
+  
+   geom_point()+ 
+  
+   geom_abline(intercept = modela50oy[["coef"]][1], slope = modela50oy[["coef"]][2],colour = "#ff33cc")+ 
+  
+   scale_x_continuous(name = "Age in Years",  
+
+                     breaks = seq(20, 80, 10)) + 
+
+   scale_y_continuous(name = "Face Intergration time in ms",  
+
+                     breaks = seq(120, 300, 20), 
+                     limits = c(110, 300))+ 
+
+   theme_classic()+ 
+   labs(tag = "A") +
+   theme(legend.position = "none") +
+   theme(plot.title = element_text(size=15),
+         axis.title.x  = element_text(size=15),
+         axis.title.y  = element_text(size=15),
+        plot.tag = element_text(size = 30),
+        plot.tag.position = c(0.3, 0.85))
+
+plota50oy
+```
+
+### boostrap of slope comparison between J48 and B97
+
+```{r}
+nboot <- 5000 # number of bootstrap samples
+
+boot.corrf120oy <- vector(mode = "numeric", length = nboot)
+
+n_f120oy <- 97
+xf120oy <- as.numeric(unlist(a50oy[,1]))
+yf120oy <- as.numeric(unlist(a50oy[,2]))
+
+for(B in 1:nboot){
+  boot.id <- sample(n_f120oy, size = n_f120oy, replace=TRUE) # bootstrap pairs of observations
+  boot.corrf120oy[B] <- stsreg(xf120oy[boot.id], yf120oy[boot.id])$coef[2] 
+}
+
+
+alpha <- 1-0.50 # arbitrary alpha value
+ci50f120oy <- quantile(boot.corrf120oy, probs = c(alpha/2, 1-alpha/2))
+alpha <- 1-0.89 # arbitrary alpha value
+ci89f120oy <- quantile(boot.corrf120oy, probs = c(alpha/2, 1-alpha/2))
+alpha <- 1-0.97 # arbitrary alpha value
+ci97f120oy <- quantile(boot.corrf120oy, probs = c(alpha/2, 1-alpha/2))
+
+pvalf120oy <- sum(boot.corrf120oy < 0)/nboot
+pvalf120oy <- 2 * min(pvalf120oy, 1 - pvalf120oy)
+```
+
+```{r}
+corf120oy <- stsreg(xf120oy, yf120oy)$coef[2]
+corf48 <- stsreg(xf48, yf48)$coef[2]
+
+dff120oy <- as_tibble(with(density(boot.corrf120oy),data.frame(x,y)))
+dff48 <- as_tibble(with(density(boot.corrf48),data.frame(x,y)))
+
+plotffslopeoy <- ggplot() + theme_gar +
+    geom_vline(xintercept = corf120oy, size = 1, colour = "#ff3399") +
+    geom_line(aes(x = x, y = y),size = 2, colour = "pink", data = dff120oy) +
+    geom_vline(xintercept = corf48,  size = 1, colour = "darkblue") +
+    geom_line(aes(x = x, y = y),size = 2,colour = "blue", data = dff48)+
+    scale_x_continuous(breaks = seq(-1, 2.5, 0.5)) +
+   scale_y_continuous(limits = c(0, 3.5))+
+  labs(tag = "B",x = "F97 vs F48") +
+    theme(axis.ticks.y = element_blank(),
+          axis.text.x = element_text(size=20),
+          axis.text.y = element_blank(),
+          axis.title.y = element_blank(),
+          legend.title = element_blank(),
+         plot.tag = element_text(size = 30),
+         plot.tag.position = c(0.25, 0.85)) +
+  # confidence intervals ----------------------
+  geom_segment(x = ci97f120oy[1], xend = ci97f120oy[2],
+             y = 0, yend = 0,
+             lineend = "round", size = 3, colour = "#990066", data = dff120oy) +
+  geom_segment(x = ci89f120oy[1], xend = ci89f120oy[2],
+               y = 0, yend = 0,
+               lineend = "round", size = 3, colour = "#ff33cc", data = dff120oy) +
+  geom_segment(x = ci50f120oy[1], xend = ci50f120oy[2],
+               y = 0, yend = 0,
+               lineend = "round", size = 3, colour = "#ff99cc", data = dff120oy)  +
+  # confidence intervals ----------------------
+  geom_segment(x = ci97f48[1], xend = ci97f48[2],
+             y = 0.1, yend = 0.1,
+             lineend = "round", size = 3, colour = "darkblue", data = dff48) +
+  geom_segment(x = ci89f48[1], xend = ci89f48[2],
+               y = 0.10, yend = 0.10,
+               lineend = "round", size = 3, colour = "#3399FF", data = dff48) +
+  geom_segment(x = ci50f48[1], xend = ci50f48[2],
+               y = 0.10, yend = 0.10,
+               lineend = "round", size = 3, colour = "lightblue", data = dff48) 
+plotffslopeoy
+ggsave("plotffslopeoy.png")
+```
+
+### boostrap of the difference between slope of J48 and B97
+
+```{r}
+set.seed(21)
+nboot <- 5000 # number of bootstrap samples
+alpha <- 0.05 # alpha level for confidence interval
+boot.diff <- vector(mode = "numeric", length = nboot) # vector of bootstrap correlations
+for(B in 1:nboot){
+  boot.id1 <- sample(n_f120oy, size = n_f120oy, replace=TRUE) # bootstrap pairs of observations in group 1
+  boot.id2 <- sample(n_f48, size = n_f48, replace=TRUE) # bootstrap pairs of observations in group 2
+  boot.diff[B] <- stsreg(xf120oy[boot.id1], yf120oy[boot.id1])$coef[2] - stsreg(xf48[boot.id2], yf48[boot.id2])$coef[2]
+}
+
+pval <- sum(boot.diff < 0)/nboot
+pval <- 2 * min(pval, 1 - pval) 
+
+aav <- 1-0.50 # arbitrary alpha value
+ci50 <- quantile(boot.diff, probs = c(aav/2, 1-aav/2))
+aav <- 1-0.89 # arbitrary alpha value
+ci89 <- quantile(boot.diff, probs = c(aav/2, 1-aav/2))
+aav <- 1-0.97 # arbitrary alpha value
+ci97 <- quantile(boot.diff, probs = c(aav/2, 1-aav/2))
+
+corr.diff <- stsreg(xf120oy, yf120oy)$coef[2] - stsreg(xf48, yf48)$coef[2]
+
+df <- as_tibble(with(density(boot.diff), data.frame(x,y)))
+
+plotffslopediffoy<-ggplot(df, aes(x = x, y = y)) + theme_gar +
+  geom_line(size = 2, show.legend=FALSE) +
+  geom_vline(xintercept = 0, colour = "black", linetype = "dashed", size = 1) +
+  geom_vline(xintercept = corr.diff, colour = "black", size = 1) +
+  scale_x_continuous(breaks = seq(-1, 2, 0.5)) +
+  scale_y_continuous(limits = c(0, 3))+
+  labs(tag = "C",
+       x = "F97 vs F48") +
+  theme(axis.ticks.y = element_blank(),
+        axis.text.x = element_text(size=20),
+        axis.text.y = element_blank(),
+        axis.title.x  = element_text(size=20),
+        axis.title.y  = element_blank(),
+         plot.tag = element_text(size = 30),
+         plot.tag.position = c(0.25, 0.85)) +
+  # confidence intervals ----------------------
+  geom_segment(x = ci97[1], xend = ci97[2],
+             y = 0, yend = 0,
+             lineend = "round", size = 5, colour = "black") +
+  geom_segment(x = ci89[1], xend = ci89[2],
+               y = 0, yend = 0,
+               lineend = "round", size = 5, colour = "darkgrey") +
+  geom_segment(x = ci50[1], xend = ci50[2],
+               y = 0, yend = 0,
+               lineend = "round", size = 5, colour = "lightgrey") 
+
+plotffslopediffoy
+
+ggsave("plotffslopediffoy.png",width = 7, height = 7)
+
+```
+
+### plot combine
+
+```{r}
+combined_plot6<-ggarrange(
+  plota50oy,
+  plotffslopeoy,
+  plotffslopediffoy,
+  nrow = 1,
+  ncol = 3
+)
+combined_plot6
+ggsave("combined_plot6.png",width = 15, height = 5)
+```
+
+---
+title: "Untitled"
+author: "Jenny"
+date: "2023-07-10"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+
+```
+
+# preprocess data
+
+```{r}
+data_files <- list.files("C:/Users/jenny/OneDrive - University of Glasgow/final/code/data/kdata/erp2")  # Identify file names
+
+ktimeso <- read.table("C:/Users/jenny/OneDrive - University of Glasgow/final/code/data/kdata/times.txt") 
+ktimes <- as.numeric(t(as.data.frame(strsplit(ktimeso$V1, split = ","))))
+
+
+fo <- data.frame(fo = rep (NA, 650))
+
+for(i in 1:24) {                              
+       data <-  read.table(paste0("C:/Users/jenny/OneDrive - University of Glasgow/final/code/data/kdata/erp2/", data_files[i]))
+       data <- as.data.frame(strsplit(data$V1, split = ","))
+       
+       for (v in 1:length(data)){
+         data[,v] <- as.numeric(data[,v])
+         colnames(data)<-c(ktimes)
+       }
+       
+       data<-as.data.frame(colMeans(data[sapply(data, is.numeric)], na.rm=TRUE))
+       fo[,i] <-  data[1]
+       colnames(fo)[i]<-paste0("oparticipant",i)
+       assign(paste0("fo", i),data)
+}
+
+folong <- cbind(ktimes, fo)
+folong <- pivot_longer(folong, cols = 2:25, names_to = "participants", values_to = "erp")
+
+fy <- data.frame(fy = rep (NA, 650))
+
+for(i in 25:48) {                              
+       data <-  read.table(paste0("C:/Users/jenny/OneDrive - University of Glasgow/final/code/data/kdata/erp2/", data_files[i]))
+       data <- as.data.frame(strsplit(data$V1, split = ","))
+       
+       for (v in 1:length(data)){
+         data[,v] <- as.numeric(data[,v])
+         colnames(data)<-c(ktimes)}
+       
+       data<-as.data.frame(colMeans(data[sapply(data, is.numeric)], na.rm=TRUE))
+       fy[,i-24] <-  data[1]
+       colnames(fy)[i-24]<-paste0("yparticipant",i-24)
+       assign(paste0("fy", i-24),data)
+}
+
+fylong <- cbind(ktimes, fy)
+fylong <- pivot_longer(fylong, cols = 2:25, names_to = "participants", values_to = "erp")
+
+
+fon <- data.frame(fon = rep (NA, 650))
+
+for(i in 49:72) {                              
+       data <-  read.table(paste0("C:/Users/jenny/OneDrive - University of Glasgow/final/code/data/kdata/erp2/", data_files[i]))
+       data <- as.data.frame(strsplit(data$V1, split = ","))
+       
+       for (v in 1:length(data)){
+         data[,v] <- as.numeric(data[,v])
+         colnames(data)<-c(ktimes)}
+       
+       data<- as.data.frame(colMeans(data[sapply(data, is.numeric)], na.rm=TRUE))
+       fon[,i-48] <-  data[1]
+       colnames(fon)[i-48]<-paste0("oparticipant",i-48)
+       assign(paste0("fon", i-48),data)
+}
+
+fonlong <- cbind(ktimes, fon)
+fonlong <- pivot_longer(fonlong, cols = 2:25, names_to = "participants", values_to = "erp")
+
+
+fyn <- data.frame(fyn = rep (NA, 650))
+
+for(i in 73:96) {                              
+       data <-  read.table(paste0("C:/Users/jenny/OneDrive - University of Glasgow/final/code/data/kdata/erp2/", data_files[i]))
+       data <- as.data.frame(strsplit(data$V1, split = ","))
+       
+       for (v in 1:length(data)){
+         data[,v] <- as.numeric(data[,v])
+         colnames(data)<-c(ktimes)}
+       
+       data<-as.data.frame(colMeans(data[sapply(data, is.numeric)], na.rm=TRUE))
+       fyn[,i-72] <-  data[1]
+       colnames(fyn)[i-72]<-paste0("yparticipant",i-72)
+       assign(paste0("fyn", i-72),data)
+}
+
+fynlong <- cbind(ktimes, fyn)
+fynlong <- pivot_longer(fynlong, cols = 2:25, names_to = "participants", values_to = "erp")
+
+```
+
+```{r}
+ho <- data.frame(ho = rep (NA, 650))
+
+for(i in 97:120) {                              
+       data <-  read.table(paste0("C:/Users/jenny/OneDrive - University of Glasgow/final/code/data/kdata/erp2/", data_files[i]))
+       data <- as.data.frame(strsplit(data$V1, split = ","))
+       
+       for (v in 1:length(data)){
+         data[,v] <- as.numeric(data[,v])
+         colnames(data)<-c(ktimes)}
+       
+       data<-as.data.frame(colMeans(data[sapply(data, is.numeric)], na.rm=TRUE))
+       ho[,i-96] <-  data[1]
+       colnames(ho)[i-96]<-paste0("oparticipant",i-96)
+       assign(paste0("ho", i-96),data)
+}
+
+
+holong <- cbind(ktimes, ho)
+holong <- pivot_longer(holong, cols = 2:25, names_to = "participants", values_to = "erp")
+  
+
+hy <- data.frame(hy = rep (NA, 650))
+
+for(i in 121:144) {                              
+       data <-  read.table(paste0("C:/Users/jenny/OneDrive - University of Glasgow/final/code/data/kdata/erp2/", data_files[i]))
+       data <- as.data.frame(strsplit(data$V1, split = ","))
+       
+       for (v in 1:length(data)){
+         data[,v] <- as.numeric(data[,v])
+         colnames(data)<-c(ktimes)}
+       
+       
+       data<-as.data.frame(colMeans(data[sapply(data, is.numeric)], na.rm=TRUE))
+       hy[,i-120] <-  data[1]
+       colnames(hy)[i-120]<-paste0("yparticipant",i-120)
+       assign(paste0("hy", i-120),data)
+}
+
+hylong <- cbind(ktimes, hy)
+hylong <- pivot_longer(hylong, cols = 2:25, names_to = "participants", values_to = "erp")
+
+hon <- data.frame(hon = rep (NA, 650))
+
+for(i in 145:168) {                              
+       data <-  read.table(paste0("C:/Users/jenny/OneDrive - University of Glasgow/final/code/data/kdata/erp2/", data_files[i]))
+       data <- as.data.frame(strsplit(data$V1, split = ","))
+       
+       for (v in 1:length(data)){
+         data[,v] <- as.numeric(data[,v])
+         colnames(data)<-c(ktimes)}
+       
+       data<-as.data.frame(colMeans(data[sapply(data, is.numeric)], na.rm=TRUE))
+       hon[,i-144] <-  data[1]
+       colnames(hon)[i-144]<-paste0("oparticipant",i-144)
+       assign(paste0("hon", i-144),data)
+}
+
+honlong <- cbind(ktimes, hon)
+honlong <- pivot_longer(honlong, cols = 2:25, names_to = "participants", values_to = "erp")
+
+hyn <- data.frame(fhhyn = rep (NA, 650))
+
+for(i in 169:192) {                              
+       data <-  read.table(paste0("C:/Users/jenny/OneDrive - University of Glasgow/final/code/data/kdata/erp2/", data_files[i]))
+       data <- as.data.frame(strsplit(data$V1, split = ","))
+       
+       for (v in 1:length(data)){
+         data[,v] <- as.numeric(data[,v])
+         colnames(data)<-c(ktimes)}
+       
+       data<-as.data.frame(colMeans(data[sapply(data, is.numeric)], na.rm=TRUE))
+       hyn[,i-168] <-  data[1]
+       colnames(hyn)[i-168]<-paste0("yparticipant",i-168)
+       assign(paste0("hyn", i-168),data)
+}
+
+hynlong <- cbind(ktimes, hyn)
+hynlong <- pivot_longer(hynlong, cols = 2:25, names_to = "participants", values_to = "erp")
+
+```
+
+```{r}
+lo <- data.frame(lo = rep (NA, 650))
+
+for(i in 193:216) {                              
+       data <-  read.table(paste0("C:/Users/jenny/OneDrive - University of Glasgow/final/code/data/kdata/erp2/", data_files[i]))
+       data <- as.data.frame(strsplit(data$V1, split = ","))
+       
+       for (v in 1:length(data)){
+         data[,v] <- as.numeric(data[,v])
+         colnames(data)<-c(ktimes)}
+       
+       data<-as.data.frame(colMeans(data[sapply(data, is.numeric)], na.rm=TRUE))
+       lo[,i-192] <-  data[1]
+       colnames(lo)[i-192]<-paste0("oparticipant",i-192)
+       assign(paste0("lo", i-192),data)
+}
+
+lolong <- cbind(ktimes, lo)
+lolong <- pivot_longer(lolong, cols = 2:25, names_to = "participants", values_to = "erp")
+
+ly <- data.frame(ly = rep (NA, 650))
+
+for(i in 217:240) {                              
+       data <-  read.table(paste0("C:/Users/jenny/OneDrive - University of Glasgow/final/code/data/kdata/erp2/", data_files[i]))
+       data <- as.data.frame(strsplit(data$V1, split = ","))
+       
+       for (v in 1:length(data)){
+         data[,v] <- as.numeric(data[,v])
+         colnames(data)<-c(ktimes)}
+       
+       data<-as.data.frame(colMeans(data[sapply(data, is.numeric)], na.rm=TRUE))
+       ly[,i-216] <-  data[1]
+       colnames(ly)[i-216]<-paste0("yparticipant",i-216)
+       assign(paste0("ly", i-216),data)
+}
+
+lylong <- cbind(ktimes, ly)
+lylong <- pivot_longer(lylong, cols = 2:25, names_to = "participants", values_to = "erp")
+
+lon <- data.frame(lon = rep (NA, 650))
+
+for(i in 241:264) {                              
+       data <-  read.table(paste0("C:/Users/jenny/OneDrive - University of Glasgow/final/code/data/kdata/erp2/", data_files[i]))
+       data <- as.data.frame(strsplit(data$V1, split = ","))
+       
+       for (v in 1:length(data)){
+         data[,v] <- as.numeric(data[,v])
+         colnames(data)<-c(ktimes)}
+       
+       data<-as.data.frame(colMeans(data[sapply(data, is.numeric)], na.rm=TRUE))
+       lon[,i-240] <-  data[1]
+       colnames(lon)[i-240]<-paste0("oparticipant",i-240)
+       assign(paste0("lon", i-240),data)
+}
+
+lonlong <- cbind(ktimes, lon)
+lonlong <- pivot_longer(lonlong, cols = 2:25, names_to = "participants", values_to = "erp")
+
+lyn <- data.frame(lyn = rep (NA, 650))
+
+for(i in 265:288) {                              
+       data <-  read.table(paste0("C:/Users/jenny/OneDrive - University of Glasgow/final/code/data/kdata/erp2/", data_files[i]))
+       data <- as.data.frame(strsplit(data$V1, split = ","))
+       
+       for (v in 1:length(data)){
+         data[,v] <- as.numeric(data[,v])
+         colnames(data)<-c(ktimes)}
+       
+       data<-as.data.frame(colMeans(data[sapply(data, is.numeric)], na.rm=TRUE))
+       lyn[,i-264] <-  data[1]
+       colnames(lyn)[i-264]<-paste0("yparticipant",i-264)
+       assign(paste0("lyn", i-264),data)
+}
+
+lynlong <- cbind(ktimes, lyn)
+lynlong <- pivot_longer(lynlong, cols = 2:25, names_to = "participants", values_to = "erp")
+
+
+```
+
+# function for ERP plot result
+
+```{r}
+erpplot <- function(dfo,dfy){
+
+   ggplot()+
+  
+   geom_line(data = dfo, aes(x = ktimes, y = erp, group = participants),color = "green", alpha = 0.7) + 
+   geom_line(data = dfy, aes(x = ktimes, y = erp, group = participants),color = "#0070cc", alpha = 0.7)+
+
+   geom_hline(yintercept=0)+ 
+
+   scale_x_continuous(name = "Time in ms",  
+                      limits = c(-100, 500, 100),
+
+                     breaks = seq(-100, 500, 100)) + 
+
+   scale_y_continuous(name = "ERP",  
+                     limits = c(-2, 2),
+
+                     breaks = seq(-2, 2, 0.25))+
+
+   theme_bw()+ 
+
+   theme(legend.position = "none")+  
+     
+  stat_summary(data = dfo,aes(x = ktimes, y = erp, group = participants),geom="line", fun = "median", group = "times", color="darkgreen", size=3)+
+  stat_summary(data = dfy,aes(x = ktimes, y = erp, group = participants),geom="line", fun = "median", group = "times", color="navy", size=3)
+}
+```
+
+## ERP result plotting
+
+```{r}
+fplot <- erpplot(folong,fylong) +
+   labs(tag = "Face")+
+    theme(axis.text.x = element_blank(),
+          axis.text.y = element_text(colour="grey20",size=27),
+          axis.title.x = element_blank(),
+          axis.title.y = element_blank(),
+          legend.title = element_blank(),
+         plot.tag = element_text(size = 40),
+         plot.tag.position = c(0.25, 0.85))
+
+fplot
+```
+
+```{r}
+fnplot <- erpplot(fonlong,fynlong) +
+    theme(axis.text.x = element_blank(),
+          axis.text.y = element_blank(),
+          axis.title.x = element_blank(),
+          axis.title.y = element_blank(),
+          legend.title = element_blank())
+
+fnplot
+```
+
+```{r}
+hplot <- erpplot(holong,hylong) +
+   labs(tag = "House")+
+    theme(axis.text.x = element_blank(),
+          axis.text.y = element_text(colour="grey20",size=27),
+          axis.title.x = element_blank(),
+          axis.title.y = element_blank(),
+          legend.title = element_blank(),
+         plot.tag = element_text(size = 40),
+         plot.tag.position = c(0.25, 0.85))
+
+hplot
+```
+
+```{r}
+hnplot <- erpplot(honlong,hynlong) +
+    theme(axis.text.x = element_blank(),
+          axis.text.y = element_blank(),
+          axis.title.x = element_blank(),
+          axis.title.y = element_blank(),
+          legend.title = element_blank())
+
+hnplot
+```
+
+```{r}
+lplot <- erpplot(lolong,lylong) +
+   labs(tag = "Letters")+
+    theme(axis.text.x = element_text(colour="grey20",size=27),
+          axis.text.y = element_text(colour="grey20",size=27),
+          axis.title.x = element_blank(),
+          axis.title.y = element_blank(),
+          legend.title = element_blank(),
+         plot.tag = element_text(size = 40),
+         plot.tag.position = c(0.25, 0.85))
+
+lplot
+```
+
+```{r}
+lnplot <- erpplot(lonlong,lynlong) +
+    theme(axis.text.x = element_text(colour="grey20",size=27),
+          axis.text.y = element_blank(),
+          axis.title.x = element_blank(),
+          axis.title.y = element_blank(),
+          legend.title = element_blank())
+
+lnplot
+```
+
+## founction for difference between ERP result & apply it to dataset
+```{r}
+diff <- function(df1,df2,groupname){
+  
+ dfdiff <- as.data.frame(df1$erp-df2$erp) 
+ colnames (dfdiff)[1]<- paste0("diff")
+ dfdiff <-  cbind(df1,df2$erp, dfdiff) |>
+    add_column(group = groupname)
+}
+
+ffnodiff <- diff(folong,fonlong,"old")
+hhnodiff <- diff(holong,honlong,"old")
+llnodiff <- diff(lolong,lonlong,"old")
+
+ffnydiff <- diff(fylong,fynlong, "young")
+hhnydiff <- diff(hylong,hynlong, "young")
+llnydiff <- diff(lylong,lynlong, "young")
+
+#different between condition
+
+fhodiff <- diff(folong,holong,"old")
+fhydiff <- diff(fylong,hylong, "young")
+
+flodiff <- diff(folong,lolong,"old")
+flydiff <- diff(fylong,lylong, "young")
+
+hlodiff <- diff(holong,lolong,"old")
+hlydiff <- diff(hylong,lylong, "young")
+
+# different between condition in noise
+fhondiff <- diff(fonlong,honlong,"old")
+fhyndiff <- diff(fynlong,hynlong, "young")
+
+flondiff <- diff(fonlong,lonlong,"old")
+flyndiff <- diff(fynlong,lynlong, "young")
+
+hlondiff <- diff(honlong,lonlong,"old")
+hlyndiff <- diff(hynlong,lynlong, "young")
+```
+
+## founction for plotting difference between ERP result
+
+```{r}
+diffplot <- function(diff1,diff2){
+ 
+  ggplot()+
+  
+  geom_line(data = diff1, aes(x = ktimes, y = diff, group = participants),color = "green", alpha = 0.7) +
+  geom_line(data = diff2, aes(x = ktimes, y = diff, group = participants),color = "#0070cc", alpha = 0.7) +
+
+   geom_hline(yintercept=0)+
+   scale_x_continuous(name = "Time in ms",  
+                      limits = c(-100, 500, 100),
+
+                     breaks = seq(-100, 500, 100)) + 
+
+   scale_y_continuous(name = "ERP difference", 
+                     limits = c(-2, 2),
+
+                     breaks = seq(-2, 2, 0.25))+
+   theme_bw()+ 
+
+   theme(legend.position = "none")+  
+     
+  stat_summary(data = diff1,aes(x = ktimes, y = diff, group = participants),geom="line", fun = "median", group = "times", color="darkgreen", size=3)+
+     
+  stat_summary(data = diff2,aes(x = ktimes, y = diff, group = participants),geom="line", fun = "median", group = "times", color="navy", size=3)
+}
+```
+
+
+```{r}
+fdiffplot <- diffplot (ffnodiff, ffnydiff)+
+    theme(axis.text.x = element_blank(),
+          axis.text.y = element_blank(),
+          axis.title.x = element_blank(),
+          axis.title.y = element_blank(),
+          legend.title = element_blank())
+
+fdiffplot
+
+```
+
+```{r}
+hdiffplot <- diffplot (hhnodiff, hhnydiff)+
+    theme(axis.text.x = element_blank(),
+          axis.text.y = element_blank(),
+          axis.title.x = element_blank(),
+          axis.title.y = element_blank(),
+          legend.title = element_blank())
+
+hdiffplot
+
+```
+
+```{r}
+ldiffplot <- diffplot (llnodiff, llnydiff)+
+    theme(axis.text.x = element_text(colour="grey20",size=27),
+          axis.text.y = element_blank(),
+          axis.title.x = element_blank(),
+          axis.title.y = element_blank(),
+          legend.title = element_blank())
+
+ldiffplot
+```
+
+```{r}
+binderp<-ggarrange(fplot,
+                  fnplot,
+                  fdiffplot,
+                  hplot,
+                  hnplot,
+                  hdiffplot,
+                  lplot,
+                  lnplot,
+                  ldiffplot,
+                  nrow = 3,
+                  ncol = 3)
+binderp
+ggsave("binderp.png",width = 25, height = 20)
+```
+
+
+```{r}
+fhdiff<- diffplot (fhodiff,fhydiff)+
+    labs(tag = "Face - House")+
+    theme(axis.text.x = element_blank(),
+          axis.text.y = element_text(colour="grey20",size=25),
+          axis.title.x = element_blank(),
+          axis.title.y =element_text(colour="grey20",size=25),
+          legend.title = element_blank(),
+         plot.tag = element_text(size = 35),
+         plot.tag.position = c(0.40, 0.90))
+fhdiff
+
+
+fldiff<- diffplot (flodiff,flydiff)+
+    labs(tag = "Face - Letter")+
+    theme(axis.text.x = element_blank(),
+          axis.text.y = element_text(colour="grey20",size=25),
+          axis.title.x = element_blank(),
+          axis.title.y =element_text(colour="grey20",size=25),
+          legend.title = element_blank(),
+         plot.tag = element_text(size = 35),
+         plot.tag.position = c(0.4, 0.90))
+
+
+
+hldiff<- diffplot (hlodiff,hlydiff)+
+  labs(tag = "House - Letter")+
+  theme(axis.text.x = element_text(colour="grey20",size=25),
+          axis.text.y = element_text(colour="grey20",size=25),
+          axis.title.x = element_text(colour="grey20",size=25),
+          axis.title.y =element_text(colour="grey20",size=25),
+          legend.title = element_blank(),
+         plot.tag = element_text(size = 35),
+         plot.tag.position = c(0.40, 0.90))
+hldiff
+```
+
+```{r}
+fhndiff<- diffplot (fhondiff,fhyndiff)+
+    theme(axis.text.x = element_blank(),
+          axis.text.y = element_blank(),
+          axis.title.x = element_blank(),
+          axis.title.y = element_blank(),
+          legend.title = element_blank())
+
+fhndiff
+
+flndiff<- diffplot (flondiff,flyndiff)+
+    theme(axis.text.x = element_blank(),
+          axis.text.y = element_blank(),
+          axis.title.x = element_blank(),
+          axis.title.y = element_blank(),
+          legend.title = element_blank())
+
+
+
+hlndiff<- diffplot (hlondiff,hlyndiff)+
+  theme(axis.text.x = element_text(colour="grey20",size=25),
+          axis.text.y = element_blank(),
+          axis.title.x = element_text(colour="grey20",size=25),
+          axis.title.y = element_blank(),
+          legend.title = element_blank())
+
+hlndiff
+
+```
+## ANOVA
+
+```{r}
+
+fhgroupf <- data.frame(resultt = rep (NA,1))
+fhcategoryf <- data.frame(resultt = rep (NA,1))
+fhinteractf <- data.frame(resultt = rep (NA,1))
+
+fhgroupp <- data.frame(resultt = rep (NA,1))
+fhcategoryp <- data.frame(resultt = rep (NA,1))
+fhinteractp <- data.frame(resultt = rep (NA,1))
+
+ for (i in 1: 650){
+  time <- ktimes[i]
+  difffh <- rbind(fhodiff[fhodiff$ktimes == time,],fhydiff[fhydiff$ktimes == time,])
+  difffh["category"] <- "image"
+  difffhn <-  rbind(fhondiff[fhondiff$ktimes == time,], fhyndiff[fhyndiff$ktimes == time,])
+  difffhn["category"] <- "noise"
+  diff <- rbind(difffh,difffhn)
+  fhogroup <- aov(diff ~ group*category, data = diff)
+  
+  fhgroupf[,i]<-  summary(fhogroup)[[1]][1,4]
+  fhcategoryf[,i]<-  summary(fhogroup)[[1]][2,4]
+  fhinteractf[,i] <- summary(fhogroup)[[1]][3,4]
+  
+  fhgroupp[,i]<-  summary(fhogroup)[[1]][1,5]
+  fhcategoryp[,i]<-  summary(fhogroup)[[1]][2,5]
+  fhinteractp[,i] <- summary(fhogroup)[[1]][3,5]
+  
+  colnames(fhgroupf)[i]<-paste0(ktimes[i])
+  colnames(fhcategoryf)[i]<-paste0(ktimes[i])
+  colnames(fhinteractf)[i]<-paste0(ktimes[i])
+  
+  colnames(fhgroupp)[i]<-paste0(ktimes[i])
+  colnames(fhcategoryp)[i]<-paste0(ktimes[i])
+  colnames(fhinteractp)[i]<-paste0(ktimes[i])
+
+ }
+
+ 
+fhgroupf <- pivot_longer(data = fhgroupf,
+                   cols = 1:650,
+                   names_to = "time",
+                   values_to = "fvalue")
+
+fhcategoryf <- pivot_longer(data = fhcategoryf,
+                   cols = 1:650,
+                   names_to = "time",
+                   values_to = "fvalue")
+
+fhinteractf <- pivot_longer(data = fhinteractf,
+                   cols = 1:650,
+                   names_to = "time",
+                   values_to = "fvalue")
+
+fhgroupp <- pivot_longer(data = fhgroupp,
+                   cols = 1:650,
+                   names_to = "time",
+                   values_to = "pvalue")
+
+fhcategoryp <- pivot_longer(data = fhcategoryp,
+                   cols = 1:650,
+                   names_to = "time",
+                   values_to = "pvalue")
+
+fhinteractp <- pivot_longer(data = fhinteractp,
+                   cols = 1:650,
+                   names_to = "time",
+                   values_to = "pvalue")
+  
+fhgroupfp <- cbind(fhgroupf,fhgroupp$pvalue)
+colnames(fhgroupfp)[3]<- "pvalue"
+
+fhgroupfp <- fhgroupfp |> 
+  mutate(Color = ifelse(pvalue > 0.05, "darkred", "pink")) |>
+  add_column(variable = "group")
+
+fhcategoryfp <- cbind(fhcategoryf,fhcategoryp$pvalue)
+colnames(fhcategoryfp)[3]<- "pvalue"
+fhcategoryfp <- fhcategoryfp |> 
+  mutate(Color = ifelse(pvalue > 0.05, "darkgreen", "green")) |>
+  add_column(variable = "category")
+
+fhinteractfp <- cbind(fhinteractf,fhinteractp$pvalue)
+colnames(fhinteractfp)[3]<- "pvalue"
+fhinteractfp <- fhinteractfp |> 
+  mutate(Color = ifelse(pvalue > 0.05, "darkblue", "skyblue")) |>
+  add_column(variable = "category")
+
+
+
+fvaluegraphfh <- ggplot()+
+   geom_line(aes(x = as.numeric(time), y = fvalue, color = Color, group = variable),  data = fhgroupfp, size = 2)+ 
+   geom_line(aes(x = as.numeric(time), y = fvalue, color = Color, group = variable),  data = fhcategoryfp, size = 2)+
+   geom_line(aes(x = as.numeric(time), y = fvalue, color = Color, group = variable),  data = fhinteractfp, size = 2)+
+   theme_gar+
+   scale_x_continuous(name = "Time in ms",  
+                      limits = c(-100, 500),
+
+                     breaks = seq(-100, 500, 100),
+                     expand = c(0, 20)) + 
+
+   scale_y_continuous (name = "F value",  
+                      limits = c(0, 35),
+                      breaks = seq(0, 35, 5),
+                      expand = c(0, 0))+ 
+   scale_color_identity() + 
+
+
+   theme_bw()+ 
+
+   labs(title  = "Face - House")+
+
+   theme(legend.position = "none") +
+   theme(title  = element_text(size = 30),
+         axis.title.x  = element_text(size = 25),
+         axis.title.y  =element_text(size = 25),
+         axis.text.x = element_text(size = 25),
+         axis.text.y = element_text(size = 25))
+
+fvaluegraphfh
+
+ggsave("fvaluegraphfh.png",width = 7, height = 7)
+
+
+```
+
+
+
+
+```{r}
+
+flgroupf <- data.frame(resultt = rep (NA,1))
+flcategoryf <- data.frame(resultt = rep (NA,1))
+flinteractf <- data.frame(resultt = rep (NA,1))
+
+flgroupp <- data.frame(resultt = rep (NA,1))
+flcategoryp <- data.frame(resultt = rep (NA,1))
+flinteractp <- data.frame(resultt = rep (NA,1))
+
+ for (i in 1: 650){
+  time <- ktimes[i]
+  difffl <- rbind(flodiff[flodiff$ktimes == time,],flydiff[flydiff$ktimes == time,])
+  difffl["category"] <- "image"
+  difffln <-  rbind(flondiff[flondiff$ktimes == time,], flyndiff[flyndiff$ktimes == time,])
+  difffln["category"] <- "noise"
+  diff <- rbind(difffl,difffln)
+  flogroup <- aov(diff ~ group*category, data = diff)
+  
+  flgroupf[,i]<-  summary(flogroup)[[1]][1,4]
+  flcategoryf[,i]<-  summary(flogroup)[[1]][2,4]
+  flinteractf[,i] <- summary(flogroup)[[1]][3,4]
+  
+  flgroupp[,i]<-  summary(flogroup)[[1]][1,5]
+  flcategoryp[,i]<-  summary(flogroup)[[1]][2,5]
+  flinteractp[,i] <- summary(flogroup)[[1]][3,5]
+  
+  colnames(flgroupf)[i]<-paste0(ktimes[i])
+  colnames(flcategoryf)[i]<-paste0(ktimes[i])
+  colnames(flinteractf)[i]<-paste0(ktimes[i])
+  
+  colnames(flgroupp)[i]<-paste0(ktimes[i])
+  colnames(flcategoryp)[i]<-paste0(ktimes[i])
+  colnames(flinteractp)[i]<-paste0(ktimes[i])
+
+ }
+
+ 
+flgroupf <- pivot_longer(data = flgroupf,
+                   cols = 1:650,
+                   names_to = "time",
+                   values_to = "fvalue")
+
+flcategoryf <- pivot_longer(data = flcategoryf,
+                   cols = 1:650,
+                   names_to = "time",
+                   values_to = "fvalue")
+
+flinteractf <- pivot_longer(data = flinteractf,
+                   cols = 1:650,
+                   names_to = "time",
+                   values_to = "fvalue")
+
+flgroupp <- pivot_longer(data = flgroupp,
+                   cols = 1:650,
+                   names_to = "time",
+                   values_to = "pvalue")
+
+flcategoryp <- pivot_longer(data = flcategoryp,
+                   cols = 1:650,
+                   names_to = "time",
+                   values_to = "pvalue")
+
+flinteractp <- pivot_longer(data = flinteractp,
+                   cols = 1:650,
+                   names_to = "time",
+                   values_to = "pvalue")
+  
+flgroupfp <- cbind(flgroupf,flgroupp$pvalue)
+colnames(flgroupfp)[3]<- "pvalue"
+
+flgroupfp <- flgroupfp |> 
+  mutate(Color = ifelse(pvalue > 0.05, "darkred", "pink")) |>
+  add_column(variable = "group")
+
+flcategoryfp <- cbind(flcategoryf,flcategoryp$pvalue)
+colnames(flcategoryfp)[3]<- "pvalue"
+flcategoryfp <- flcategoryfp |> 
+  mutate(Color = ifelse(pvalue > 0.05, "darkgreen", "green")) |>
+  add_column(variable = "category")
+
+flinteractfp <- cbind(flinteractf,flinteractp$pvalue)
+colnames(flinteractfp)[3]<- "pvalue"
+flinteractfp <- flinteractfp |> 
+  mutate(Color = ifelse(pvalue > 0.05, "darkblue", "skyblue")) |>
+  add_column(variable = "category")
+
+
+
+fvaluegraphfl <- ggplot()+
+   geom_line(aes(x = as.numeric(time), y = fvalue, color = Color, group = variable),  data = flgroupfp, size = 2)+ 
+   geom_line(aes(x = as.numeric(time), y = fvalue, color = Color, group = variable),  data = flcategoryfp, size = 2)+
+   geom_line(aes(x = as.numeric(time), y = fvalue, color = Color, group = variable),  data = flinteractfp, size = 2)+
+   theme_gar+
+   scale_x_continuous(name = "Time in ms",  
+                      limits = c(-100, 500),
+
+                     breaks = seq(-100, 500, 100),
+                     expand = c(0, 20)) + 
+
+   scale_y_continuous (name = "F value",  
+                      limits = c(0, 35),
+                      breaks = seq(0, 35, 5),
+                      expand = c(0, 0))+ 
+   scale_color_identity() + 
+
+   theme_bw()+ 
+   labs(title  = "Face - Letter")+
+   theme(legend.position = "none") +
+   theme(title  = element_text(size = 30),
+         axis.title.x  = element_text(size = 25),
+         axis.title.y  =element_text(size = 25),
+         axis.text.x = element_text(size = 25),
+         axis.text.y = element_text(size = 25))
+
+fvaluegraphfl
+ggsave("fvaluegraphfl.png",width = 7, height = 7)
+```
+
+```{r}
+
+hlgroupf <- data.frame(resultt = rep (NA,1))
+hlcategoryf <- data.frame(resultt = rep (NA,1))
+hlinteractf <- data.frame(resultt = rep (NA,1))
+
+hlgroupp <- data.frame(resultt = rep (NA,1))
+hlcategoryp <- data.frame(resultt = rep (NA,1))
+hlinteractp <- data.frame(resultt = rep (NA,1))
+
+ for (i in 1: 650){
+  time <- ktimes[i]
+  diffhl <- rbind(hlodiff[hlodiff$ktimes == time,],hlydiff[hlydiff$ktimes == time,])
+  diffhl["category"] <- "image"
+  diffhln <-  rbind(hlondiff[hlondiff$ktimes == time,], hlyndiff[hlyndiff$ktimes == time,])
+  diffhln["category"] <- "noise"
+  diff <- rbind(diffhl,diffhln)
+  hlogroup <- aov(diff ~ group*category, data = diff)
+  
+  hlgroupf[,i]<-  summary(hlogroup)[[1]][1,4]
+  hlcategoryf[,i]<-  summary(hlogroup)[[1]][2,4]
+  hlinteractf[,i] <- summary(hlogroup)[[1]][3,4]
+  
+  hlgroupp[,i]<-  summary(hlogroup)[[1]][1,5]
+  hlcategoryp[,i]<-  summary(hlogroup)[[1]][2,5]
+  hlinteractp[,i] <- summary(hlogroup)[[1]][3,5]
+  
+  colnames(hlgroupf)[i]<-paste0(ktimes[i])
+  colnames(hlcategoryf)[i]<-paste0(ktimes[i])
+  colnames(hlinteractf)[i]<-paste0(ktimes[i])
+  
+  colnames(hlgroupp)[i]<-paste0(ktimes[i])
+  colnames(hlcategoryp)[i]<-paste0(ktimes[i])
+  colnames(hlinteractp)[i]<-paste0(ktimes[i])
+
+ }
+
+ 
+hlgroupf <- pivot_longer(data = hlgroupf,
+                   cols = 1:650,
+                   names_to = "time",
+                   values_to = "fvalue")
+
+hlcategoryf <- pivot_longer(data = hlcategoryf,
+                   cols = 1:650,
+                   names_to = "time",
+                   values_to = "fvalue")
+
+hlinteractf <- pivot_longer(data = hlinteractf,
+                   cols = 1:650,
+                   names_to = "time",
+                   values_to = "fvalue")
+
+hlgroupp <- pivot_longer(data = hlgroupp,
+                   cols = 1:650,
+                   names_to = "time",
+                   values_to = "pvalue")
+
+hlcategoryp <- pivot_longer(data = hlcategoryp,
+                   cols = 1:650,
+                   names_to = "time",
+                   values_to = "pvalue")
+
+hlinteractp <- pivot_longer(data = hlinteractp,
+                   cols = 1:650,
+                   names_to = "time",
+                   values_to = "pvalue")
+  
+hlgroupfp <- cbind(hlgroupf,hlgroupp$pvalue)
+colnames(hlgroupfp)[3]<- "pvalue"
+hlgroupfp <- hlgroupfp |> 
+  mutate(Color = ifelse(pvalue > 0.05, "darkred", "pink")) |>
+  add_column(variable = "group")
+
+hlcategoryfp <- cbind(hlcategoryf,hlcategoryp$pvalue)
+colnames(hlcategoryfp)[3]<- "pvalue"
+hlcategoryfp <- hlcategoryfp |> 
+  mutate(Color = ifelse(pvalue > 0.05, "darkgreen", "green")) |>
+  add_column(variable = "category")
+
+hlinteractfp <- cbind(hlinteractf,hlinteractp$pvalue)
+colnames(hlinteractfp)[3]<- "pvalue"
+hlinteractfp <- hlinteractfp |> 
+  mutate(Color = ifelse(pvalue > 0.05, "darkblue", "skyblue")) |>
+  add_column(variable = "category")
+
+
+
+fvaluegraphhl <- ggplot()+
+   geom_line(aes(x = as.numeric(time), y = fvalue, color = Color, group = variable),  data = hlgroupfp, size = 2)+ 
+   geom_line(aes(x = as.numeric(time), y = fvalue, color = Color, group = variable),  data = hlcategoryfp, size = 2)+
+   geom_line(aes(x = as.numeric(time), y = fvalue, color = Color, group = variable),  data = hlinteractfp, size = 2)+
+   theme_gar+
+   scale_x_continuous(name = "Time in ms",  
+                      limits = c(-100, 500),
+
+                     breaks = seq(-100, 500, 100),
+                     expand = c(0, 20)) + 
+
+   scale_y_continuous (name = "F value",  
+                      limits = c(0, 35),
+                      breaks = seq(0, 35, 5),
+                      expand = c(0, 0))+ 
+   scale_color_identity() + 
+
+   theme_bw()+ 
+
+   labs(title  = "House - Letter")+
+   theme(legend.position = "none") +
+   theme(title  = element_text(size = 30),
+         axis.title.x  = element_text(size = 25),
+         axis.title.y  =element_text(size = 25),
+         axis.text.x = element_text(size = 25),
+         axis.text.y = element_text(size = 25))
+
+fvaluegraphhl
+ggsave("fvaluegraphhl.png",width = 7, height = 7)
+```
+
+```{r}
+bindfvalue <-ggarrange(fvaluegraphfh,
+                       fvaluegraphfl,
+                       fvaluegraphhl,
+                     nrow = 3,
+                    ncol = 1)
+bindfvalue
+ggsave("bindfvalue.png",width = 7, height = 15)
+```
+
+
+```{r}
+binddiffcategory <-ggarrange(fhdiff,fhndiff,
+                       fldiff,flndiff,
+                       hldiff, hlndiff,
+                     nrow = 3,
+                    ncol = 2)
+binddiffcategory
+ggsave("bindfvaluediff.png",width = 15, height = 20)
+```
+
+## T-test
+
+```{r}
+fhott <- data.frame(resultt = rep (NA,1))
+fhotp <- data.frame(resultt = rep (NA,1))
+
+for (i in 1: 650){
+  time <- ktimes[i]
+  fhott[,i] <- t.test(fhodiff$diff[fhodiff$ktimes == time], fhondiff$diff[fhondiff$ktimes == time])$statistic
+  fhotp[,i] <- t.test(fhodiff$diff[fhodiff$ktimes == time], fhondiff$diff[fhondiff$ktimes == time])$p.value
+   colnames(fhott)[i]<-paste0(ktimes[i])
+   colnames(fhotp)[i]<-paste0(ktimes[i])
+}
+fhott <- pivot_longer(data = fhott,
+                   cols = 1:650,
+                   names_to = "time",
+                   values_to = "Tvalue")
+
+fhotp <- pivot_longer(data = fhotp,
+                   cols = 1:650,
+                   names_to = "time",
+                   values_to = "pvalue")
+
+
+fhottest <- cbind(fhott,fhotp$pvalue)
+
+colnames(fhottest)[3]<- "pvalue"
+fhottest <- fhottest |> 
+  mutate(Color = ifelse(pvalue > 0.05, "darkgreen", "green")) |>
+  add_column(variable = "old")
+```
+
+```{r}
+fhytt <- data.frame(resultt = rep (NA,1))
+fhytp <- data.frame(resultt = rep (NA,1))
+
+for (i in 1: 650){
+  time <- ktimes[i]
+  fhytt[,i] <- t.test(fhydiff$diff[fhydiff$ktimes == time], fhyndiff$diff[fhyndiff$ktimes == time])$statistic
+  fhytp[,i] <- t.test(fhydiff$diff[fhydiff$ktimes == time], fhyndiff$diff[fhyndiff$ktimes == time])$p.value
+   colnames(fhytt)[i]<-paste0(ktimes[i])
+   colnames(fhytp)[i]<-paste0(ktimes[i])
+}
+fhytt <- pivot_longer(data = fhytt,
+                   cols = 1:650,
+                   names_to = "time",
+                   values_to = "Tvalue")
+
+fhytp <- pivot_longer(data = fhytp,
+                   cols = 1:650,
+                   names_to = "time",
+                   values_to = "pvalue")
+
+
+fhyttest <- cbind(fhytt,fhytp$pvalue)
+
+colnames(fhyttest)[3]<- "pvalue"
+fhyttest <- fhyttest |> 
+  mutate(Color = ifelse(pvalue > 0.05, "navy", "skyblue")) |>
+  add_column(variable = "young")
+
+```
+
+```{r}
+flott <- data.frame(resultt = rep (NA,1))
+flotp <- data.frame(resultt = rep (NA,1))
+
+for (i in 1: 650){
+  time <- ktimes[i]
+  flott[,i] <- t.test(flodiff$diff[flodiff$ktimes == time], flondiff$diff[flondiff$ktimes == time])$statistic
+  flotp[,i] <- t.test(flodiff$diff[flodiff$ktimes == time], flondiff$diff[flondiff$ktimes == time])$p.value
+   colnames(flott)[i]<-paste0(ktimes[i])
+   colnames(flotp)[i]<-paste0(ktimes[i])
+}
+flott <- pivot_longer(data = flott,
+                   cols = 1:650,
+                   names_to = "time",
+                   values_to = "Tvalue")
+
+flotp <- pivot_longer(data = flotp,
+                   cols = 1:650,
+                   names_to = "time",
+                   values_to = "pvalue")
+
+
+flottest <- cbind(flott,flotp$pvalue)
+
+colnames(flottest)[3]<- "pvalue"
+flottest <- flottest |> 
+  mutate(Color = ifelse(pvalue > 0.05, "darkgreen", "green")) |>
+  add_column(variable = "old")
+
+```
+
+```{r}
+flytt <- data.frame(resultt = rep (NA,1))
+flytp <- data.frame(resultt = rep (NA,1))
+
+for (i in 1: 650){
+  time <- ktimes[i]
+  flytt[,i] <- t.test(flydiff$diff[flydiff$ktimes == time], flyndiff$diff[flyndiff$ktimes == time])$statistic
+  flytp[,i] <- t.test(flydiff$diff[flydiff$ktimes == time], flyndiff$diff[flyndiff$ktimes == time])$p.value
+   colnames(flytt)[i]<-paste0(ktimes[i])
+   colnames(flytp)[i]<-paste0(ktimes[i])
+}
+flytt <- pivot_longer(data = flytt,
+                   cols = 1:650,
+                   names_to = "time",
+                   values_to = "Tvalue")
+
+flytp <- pivot_longer(data = flytp,
+                   cols = 1:650,
+                   names_to = "time",
+                   values_to = "pvalue")
+
+
+flyttest <- cbind(flytt,flytp$pvalue)
+
+colnames(flyttest)[3]<- "pvalue"
+flyttest <- flyttest |> 
+  mutate(Color = ifelse(pvalue > 0.05, "navy", "skyblue")) |>
+  add_column(variable = "young")
+```
+
+```{r}
+hlott <- data.frame(resultt = rep (NA,1))
+hlotp <- data.frame(resultt = rep (NA,1))
+
+for (i in 1: 650){
+  time <- ktimes[i]
+  hlott[,i] <- t.test(hlodiff$diff[hlodiff$ktimes == time], hlondiff$diff[hlondiff$ktimes == time])$statistic
+  hlotp[,i] <- t.test(hlodiff$diff[hlodiff$ktimes == time], hlondiff$diff[hlondiff$ktimes == time])$p.value
+   colnames(hlott)[i]<-paste0(ktimes[i])
+   colnames(hlotp)[i]<-paste0(ktimes[i])
+}
+hlott <- pivot_longer(data = hlott,
+                   cols = 1:650,
+                   names_to = "time",
+                   values_to = "Tvalue")
+
+hlotp <- pivot_longer(data = hlotp,
+                   cols = 1:650,
+                   names_to = "time",
+                   values_to = "pvalue")
+
+
+hlottest <- cbind(hlott,hlotp$pvalue)
+
+colnames(hlottest)[3]<- "pvalue"
+hlottest <- hlottest |> 
+  mutate(Color = ifelse(pvalue > 0.05, "darkgreen", "green")) |>
+  add_column(variable = "old")
+
+
+```
+
+```{r}
+hlytt <- data.frame(resultt = rep (NA,1))
+hlytp <- data.frame(resultt = rep (NA,1))
+
+for (i in 1: 650){
+  time <- ktimes[i]
+  hlytt[,i] <- t.test(hlydiff$diff[hlydiff$ktimes == time], hlyndiff$diff[hlyndiff$ktimes == time])$statistic
+  hlytp[,i] <- t.test(hlydiff$diff[hlydiff$ktimes == time], hlyndiff$diff[hlyndiff$ktimes == time])$p.value
+   colnames(hlytt)[i]<-paste0(ktimes[i])
+   colnames(hlytp)[i]<-paste0(ktimes[i])
+}
+hlytt <- pivot_longer(data = hlytt,
+                   cols = 1:650,
+                   names_to = "time",
+                   values_to = "Tvalue")
+
+hlytp <- pivot_longer(data = hlytp,
+                   cols = 1:650,
+                   names_to = "time",
+                   values_to = "pvalue")
+
+
+hlyttest <- cbind(hlytt,hlytp$pvalue)
+
+colnames(hlyttest)[3]<- "pvalue"
+hlyttest <- hlyttest |> 
+  mutate(Color = ifelse(pvalue > 0.05, "navy", "skyblue")) |>
+  add_column(variable = "young")
+
+```
+
+```{r}
+
+fhttplot <- ggplot()+
+   geom_line(aes(x = as.numeric(time), y = Tvalue, color = Color, group = variable),  data = fhottest, size = 2)+ 
+   geom_line(aes(x = as.numeric(time), y = Tvalue, color = Color, group = variable),  data = fhyttest, size = 2)+
+   theme_gar+
+   scale_x_continuous(name = "Time in ms",  
+                      limits = c(-100, 500),
+
+                     breaks = seq(-100, 500, 100),
+                     expand = c(0, 20)) + 
+
+   scale_y_continuous (name = "T value",  
+                      limits = c(-6, 6),
+                      breaks = seq(-6, 6, 2),
+                      expand = c(0, 0))+
+   scale_color_identity() + 
+
+   theme_bw()+ 
+
+   labs(title  = "Face - House")+
+
+   theme(legend.position = "none") +
+   theme(title  = element_text(size = 30),
+         axis.title.x  = element_text(size = 25),
+         axis.title.y  =element_text(size = 25),
+         axis.text.x = element_text(size = 25),
+         axis.text.y = element_text(size = 25))
+
+fhttplot
+```
+
+
+```{r}
+
+flttplot <- ggplot()+
+   geom_line(aes(x = as.numeric(time), y = Tvalue, color = Color, group = variable),  data = flottest, size = 2)+ 
+   geom_line(aes(x = as.numeric(time), y = Tvalue, color = Color, group = variable),  data = flyttest, size = 2)+
+   theme_gar+
+   scale_x_continuous(name = "Time in ms",  
+                      limits = c(-100, 500),
+
+                     breaks = seq(-100, 500, 100),
+                     expand = c(0, 20)) + 
+
+   scale_y_continuous (name = "T value",  
+                      limits = c(-6, 6),
+                      breaks = seq(-6, 6, 2),
+                      expand = c(0, 0))+
+   scale_color_identity() + 
+
+   theme_bw()+
+  
+   labs(title  = "Face - Letter")+
+
+   theme(legend.position = "none") +
+   theme(title  = element_text(size = 30),
+         axis.title.x  = element_text(size = 25),
+         axis.title.y  =element_text(size = 25),
+         axis.text.x = element_text(size = 25),
+         axis.text.y = element_text(size = 25))
+
+flttplot
+```
+
+```{r}
+hlttplot <- ggplot()+
+   geom_line(aes(x = as.numeric(time), y = Tvalue, color = Color, group = variable),  data = hlottest, size = 2)+ 
+   geom_line(aes(x = as.numeric(time), y = Tvalue, color = Color, group = variable),  data = hlyttest, size = 2)+
+   theme_gar+
+   scale_x_continuous(name = "Time in ms",  
+                      limits = c(-100, 500),
+
+                     breaks = seq(-100, 500, 100),
+                     expand = c(0, 20)) + 
+
+   scale_y_continuous (name = "T value",  
+                      limits = c(-6, 6),
+                      breaks = seq(-6, 6, 2),
+                      expand = c(0, 0))+
+   scale_color_identity() + 
+
+   theme_bw()+
+  
+   labs(title  = "House - Letter")+
+
+   theme(legend.position = "none") +
+   theme(title  = element_text(size = 30),
+         axis.title.x  = element_text(size = 25),
+         axis.title.y  =element_text(size = 25),
+         axis.text.x = element_text(size = 25),
+         axis.text.y = element_text(size = 25))
+
+hlttplot
+```
+
+```{r}
+bindtvalue <-ggarrange(
+                       fhttplot,
+                       flttplot,
+                       hlttplot,
+                     nrow = 3,
+                    ncol = 1)
+bindtvalue
+ggsave("bindtvalue.png",width = 7, height = 15)
+```
+
